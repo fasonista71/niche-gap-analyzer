@@ -106,3 +106,4 @@ vercel --prod
 - Reddit public JSON API (no auth required)
 - Apple iTunes Search + RSS API (no auth required)
 - Anthropic Claude API (key stored server-side only)
+# Niche Gap Analyzer

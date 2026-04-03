@@ -13,3 +13,4 @@ out/
 # system files
 .DS_Store
 *.pem
+.vercel
