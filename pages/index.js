@@ -821,6 +821,9 @@ function B2BPanel({ onSave }) {
           </div>
         </div>
       )}
+
+      {/* Competitive Landscape Map */}
+      <CompetitiveLandscapePanel onSave={onSave} />
     </div>
   );
 }
