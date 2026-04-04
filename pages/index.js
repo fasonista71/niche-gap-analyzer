@@ -811,7 +811,7 @@ APP STORE LOW-RATED REVIEWS:
 ${reviewSummary || "None."}
 
 Return JSON only, no markdown:
-{ "candidates": ["<specific niche 1>", "<specific niche 2>", "<specific niche 3>", "<specific niche 4>", "<specific niche 5>"] }
+{ "candidates": ["<specific niche 1>", "<specific niche 2>", "<specific niche 3>", "<specific niche 4>", "<specific niche 5>", "<specific niche 6>", "<specific niche 7>"] }
 
 Be specific: "sleep tracking for shift workers" beats "sleep tracking".`;
 
@@ -830,7 +830,7 @@ Be specific: "sleep tracking for shift workers" beats "sleep tracking".`;
 
   // Stage 2: mini deep-dive on each candidate -- Reddit demand + App Store check
   const validations = [];
-  for (const niche of candidates.slice(0, 5)) {
+  for (const niche of candidates.slice(0, 7)) {
     try {
       const [demandData, appData] = await Promise.all([
         redditFetch(`https://www.reddit.com/search.json?q=${encodeURIComponent('"is there an app" ' + niche)}&sort=relevance&limit=8&t=all`),
@@ -880,7 +880,7 @@ Respond JSON only, no markdown:
   ]
 }
 
-Order by opportunityScore descending.`;
+Order by opportunityScore descending. Return 7-10 opportunities minimum so there's enough to paginate through.`;
 
   return streamClaude(prompt, onChunk);
 }
@@ -936,20 +936,37 @@ function DiscoveryPanel({ onDiveDeep }) {
   const [phaseLabel, setPhaseLabel] = useState("");
   const [result, setResult] = useState(null);
   const [streamText, setStreamText] = useState("");
-  const accentDisc = "#ff6bff"; // magenta for discovery
+  const [history, setHistory] = useState([]); // [{ domain, result }]
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 5;
+  const accentDisc = "#ff6bff";
 
   const run = async (domain) => {
     setSelectedDomain(domain);
-    setResult(null); setStreamText("");
+    setResult(null); setStreamText(""); setPage(0);
     try {
       setPhase("fetching");
       const { posts, appReviews } = await runDiscoverySweep(domain, label => setPhaseLabel(label));
       setPhase("synthesizing");
       setPhaseLabel(`Identifying + validating candidates in ${domain.label}…`);
       const analysis = await synthesizeDiscovery(domain, posts, appReviews, p => setStreamText(p));
-      if (analysis) { setResult(analysis); setPhase("done"); }
-      else setPhase("error");
+      if (analysis) {
+        setResult(analysis);
+        setHistory(h => [{ domain, result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
+        setPhase("done");
+      } else setPhase("error");
     } catch (e) { console.error(e); setPhase("error"); }
+  };
+
+  const clear = () => {
+    setSelectedDomain(null); setPhase("idle");
+    setResult(null); setStreamText(""); setPage(0);
+  };
+
+  const restoreHistory = (item) => {
+    setSelectedDomain(item.domain);
+    setResult(item.result);
+    setPhase("done"); setPage(0);
   };
 
   const busy = phase === "fetching" || phase === "synthesizing";
@@ -957,31 +974,35 @@ function DiscoveryPanel({ onDiveDeep }) {
   const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
   const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
 
+  const opps = result?.opportunities || [];
+  const totalPages = Math.ceil(opps.length / PAGE_SIZE);
+  const pageOpps = opps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
   return (
     <div>
       {/* Context note */}
       <div style={{ marginBottom: 24, padding: "14px 18px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}22`, borderRadius: 8 }}>
         <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.7, letterSpacing: "0.05em" }}>
-          Pick a domain to scan. Discovery runs a broad sweep across domain-specific subreddits and App Store reviews, then surfaces the top opportunities ranked by signal strength. Click any row to dive deep in B2C or B2B mode.
+          Pick a domain to scan. Discovery validates each candidate against real App Store and demand signal data before scoring — results should match what a B2C deep-dive finds.
         </p>
       </div>
 
       {/* Domain grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10, marginBottom: 28 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))", gap: 10, marginBottom: 20 }}>
         {DOMAINS.map(domain => (
           <button key={domain.id} onClick={() => !busy && run(domain)}
             disabled={busy}
             style={{
-              background: selectedDomain?.id === domain.id ? `${accentDisc}15` : C.surface,
-              border: `1px solid ${selectedDomain?.id === domain.id ? accentDisc + "66" : C.border}`,
+              background: selectedDomain?.id === domain.id && phase === "done" ? `${accentDisc}15` : C.surface,
+              border: `1px solid ${selectedDomain?.id === domain.id && phase === "done" ? accentDisc + "66" : C.border}`,
               borderRadius: 8, padding: "14px 16px", cursor: busy ? "default" : "pointer",
               textAlign: "left", transition: "border-color .2s, background .2s",
               opacity: busy && selectedDomain?.id !== domain.id ? 0.4 : 1,
             }}
             onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "88"; e.currentTarget.style.background = `${accentDisc}0d`; }}}
-            onMouseLeave={e => { if (selectedDomain?.id !== domain.id) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
+            onMouseLeave={e => { if (!(selectedDomain?.id === domain.id && phase === "done")) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
             <div style={{ fontSize: 20, marginBottom: 8 }}>{domain.emoji}</div>
-            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id ? accentDisc : C.textDim, marginBottom: 4 }}>{domain.label}</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id && phase === "done" ? accentDisc : C.textDim, marginBottom: 4 }}>{domain.label}</div>
             <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted }}>{domain.subs.slice(0,3).map(s => `r/${s}`).join(" · ")}</div>
           </button>
         ))}
@@ -1002,13 +1023,27 @@ function DiscoveryPanel({ onDiveDeep }) {
       )}
 
       {/* Results table */}
-      {phase === "done" && result?.opportunities?.length > 0 && (
+      {phase === "done" && opps.length > 0 && (
         <div style={{ animation: "fadeUp .5s ease both" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 16 }}>
-            <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentDisc }}>
-              {result.opportunities.length} Opportunities Found
-            </h3>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>— {selectedDomain?.label} · click any row to dive deep</span>
+
+          {/* Results header with clear button */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+              <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentDisc }}>
+                {opps.length} Opportunities — {selectedDomain?.label}
+              </h3>
+              {totalPages > 1 && (
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
+                  page {page + 1} of {totalPages}
+                </span>
+              )}
+            </div>
+            <button onClick={clear}
+              style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", transition: "border-color .2s, color .2s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = C.red; e.currentTarget.style.color = C.red; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+              ✕ Clear
+            </button>
           </div>
 
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -1019,17 +1054,57 @@ function DiscoveryPanel({ onDiveDeep }) {
               ))}
             </div>
 
-            {/* Table rows */}
-            {result.opportunities.map((opp, i) => (
-              <OpportunityRow key={i} opp={opp} index={i} total={result.opportunities.length}
+            {/* Table rows — current page only */}
+            {pageOpps.map((opp, i) => (
+              <OpportunityRow key={`${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
                 onDiveDeep={onDiveDeep} accentDisc={accentDisc}
                 scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
             ))}
           </div>
 
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                style={{ background: page === 0 ? C.border : C.surface, border: `1px solid ${C.border}`, color: page === 0 ? C.muted : C.text, cursor: page === 0 ? "default" : "pointer", padding: "6px 14px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                ← Prev
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => (
+                <button key={i} onClick={() => setPage(i)}
+                  style={{ background: page === i ? accentDisc : C.surface, border: `1px solid ${page === i ? accentDisc : C.border}`, color: page === i ? C.bg : C.textDim, cursor: "pointer", padding: "6px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700 }}>
+                  {i + 1}
+                </button>
+              ))}
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page === totalPages - 1}
+                style={{ background: page === totalPages - 1 ? C.border : C.surface, border: `1px solid ${C.border}`, color: page === totalPages - 1 ? C.muted : C.text, cursor: page === totalPages - 1 ? "default" : "pointer", padding: "6px 14px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Next →
+              </button>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, marginLeft: 4 }}>
+                {opps.length} total · {PAGE_SIZE} per page
+              </span>
+            </div>
+          )}
+
           <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>
-            Hit "Dive Deep →" to pre-fill B2C tab, then switch tabs to run the full analysis. Your Discovery results stay here.
+            Hit "Dive Deep →" on any row to pre-fill B2C, then switch tabs for a full analysis.
           </p>
+        </div>
+      )}
+
+      {/* History */}
+      {history.length > 0 && phase !== "fetching" && phase !== "synthesizing" && (
+        <div style={{ marginTop: 40 }}>
+          <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: C.muted, marginBottom: 12 }}>Recent Scans</h3>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {history.map((h, i) => (
+              <button key={i} onClick={() => restoreHistory(h)}
+                style={{ background: selectedDomain?.id === h.domain.id && phase === "done" && result === h.result ? `${accentDisc}15` : C.surface, border: `1px solid ${selectedDomain?.id === h.domain.id && result === h.result ? accentDisc + "44" : C.border}`, color: C.textDim, fontSize: 12, padding: "6px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'DM Mono', monospace", display: "flex", alignItems: "center", gap: 8, transition: "border-color .2s" }}>
+                <span style={{ fontSize: 14 }}>{h.domain.emoji}</span>
+                <span>{h.domain.label}</span>
+                <span style={{ color: C.muted }}>{h.result?.opportunities?.length || 0} opps</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
