@@ -946,7 +946,7 @@ function OpportunityRow({ opp, index, total, onDiveDeep, onSave, accentDisc, sco
 
 // ── Discovery Panel ────────────────────────────────────────────────────────
 // ── Discovery Panel ────────────────────────────────────────────────────────
-function DiscoveryPanel({ onDiveDeep }) {
+function DiscoveryPanel({ onDiveDeep, onSave }) {
   const [mode, setMode] = useState("idle");
   const [selectedDomain, setSelectedDomain] = useState(null);
   const [domainFilter, setDomainFilter] = useState(null);
@@ -1379,6 +1379,7 @@ export default function Home() {
                 background: "none", border: "none", cursor: "pointer", padding: "12px 24px 14px",
                 borderBottom: activeTab === tab.key ? `2px solid ${tab.accent}` : "2px solid transparent",
                 marginBottom: -1, transition: "border-color .2s", position: "relative",
+                textAlign: "left",
               }}>
                 <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: activeTab === tab.key ? tab.accent : C.muted, transition: "color .2s", marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }}>
                   {tab.label}
