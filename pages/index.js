@@ -243,7 +243,7 @@ async function streamClaude(prompt, onChunk) {
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1400, stream: true, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, stream: true, messages: [{ role: "user", content: prompt }] }),
   });
 
   if (!response.ok) {
@@ -264,8 +264,24 @@ async function streamClaude(prompt, onChunk) {
   try {
     return JSON.parse(fullText.replace(/```json|```/g, "").trim());
   } catch (e) {
-    console.error("JSON parse failed. Raw text:", fullText.slice(0, 500));
-    throw new Error(`JSON parse failed: ${e.message}. Got: ${fullText.slice(0, 100)}`);
+    // Attempt to salvage truncated JSON by closing open structures
+    let text = fullText.replace(/```json|```/g, "").trim();
+    // Close any unterminated string, array, object
+    const openBraces = (text.match(/\{/g) || []).length - (text.match(/\}/g) || []).length;
+    const openBrackets = (text.match(/\[/g) || []).length - (text.match(/\]/g) || []).length;
+    if (openBraces > 0 || openBrackets > 0) {
+      // Trim to last complete object (find last complete closing brace before truncation)
+      const lastGoodBrace = text.lastIndexOf("},");
+      if (lastGoodBrace > 0) {
+        text = text.slice(0, lastGoodBrace + 1) + "]" + "}".repeat(openBraces);
+      }
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      console.error("JSON parse failed after recovery attempt. Raw:", fullText.slice(0, 500));
+      throw new Error(`JSON parse failed: ${e.message}. Got: ${fullText.slice(0, 100)}`);
+    }
   }
 }
 
