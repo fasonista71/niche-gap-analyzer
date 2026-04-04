@@ -1627,6 +1627,77 @@ function exportSavedMarkdown(saved) {
   URL.revokeObjectURL(url);
 }
 
+// ── Saved stats panel — replaces ZeitgeistHero on Saved tab ──────────────
+function SavedStatsPanel({ saved, onExport, onDiveDeep, onClearAll }) {
+  const accentSaved = "#ffd166";
+  if (saved.length === 0) {
+    return (
+      <div style={{ marginBottom: 32, padding: "20px 28px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, display: "flex", alignItems: "center", gap: 16 }}>
+        <span style={{ fontSize: 24 }}>🔖</span>
+        <div>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted, marginBottom: 3 }}>Your Shortlist</div>
+          <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, lineHeight: 1.6 }}>Bookmark opportunities from Discovery, B2C, or B2B to build your research shortlist.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const avgScore = Math.round(saved.reduce((a, b) => a + (b.opp.opportunityScore || 0), 0) / saved.length);
+  const topItem = saved.reduce((a, b) => (b.opp.opportunityScore || 0) > (a.opp.opportunityScore || 0) ? b : a);
+  const whitespaceCount = saved.filter(x => x.opp.type === "whitespace").length;
+  const highDemand = saved.filter(x => x.opp.demandStrength === "HIGH").length;
+
+  return (
+    <div style={{ marginBottom: 32, padding: "20px 28px", background: C.surface, border: `1px solid ${accentSaved}33`, borderRadius: 10, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, alignItems: "center" }}>
+      {/* Left: stats */}
+      <div>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.14em", textTransform: "uppercase", color: accentSaved, marginBottom: 14 }}>
+          Shortlist Overview
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {[
+            { label: "Saved", value: saved.length, color: accentSaved },
+            { label: "Avg Score", value: avgScore, color: avgScore >= 70 ? C.green : avgScore >= 45 ? C.orange : C.red },
+            { label: "Whitespace", value: whitespaceCount, color: C.green },
+            { label: "High Demand", value: highDemand, color: C.green },
+          ].map(stat => (
+            <div key={stat.label}>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: stat.color, lineHeight: 1 }}>{stat.value}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginTop: 3 }}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: actions */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, marginBottom: 2 }}>
+          Top pick: <span style={{ color: accentSaved }}>{topItem.opp.niche}</span> · {topItem.opp.opportunityScore}
+        </div>
+        <button onClick={() => onDiveDeep(topItem.opp.niche)}
+          style={{ background: accentSaved, color: C.bg, border: "none", cursor: "pointer", padding: "9px 16px", borderRadius: 5, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left", transition: "opacity .2s" }}
+          onMouseEnter={e => e.currentTarget.style.opacity = "0.85"}
+          onMouseLeave={e => e.currentTarget.style.opacity = "1"}>
+          → Deep Dive Top Pick in B2C
+        </button>
+        <button onClick={onExport}
+          style={{ background: "none", border: `1px solid ${C.borderLit}`, color: C.textDim, cursor: "pointer", padding: "9px 16px", borderRadius: 5, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left", display: "flex", alignItems: "center", gap: 7, transition: "border-color .2s, color .2s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = accentSaved; e.currentTarget.style.color = accentSaved; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.borderLit; e.currentTarget.style.color = C.textDim; }}>
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          Export All as Markdown
+        </button>
+        <button onClick={onClearAll}
+          style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "9px 16px", borderRadius: 5, fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", textAlign: "left", transition: "border-color .2s, color .2s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = C.red; e.currentTarget.style.color = C.red; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+          ✕ Clear All
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SavedPanel({ saved, onRemove, onNoteChange }) {
   const accentSaved = "#ffd166"; // warm gold
   const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
@@ -1935,8 +2006,10 @@ export default function Home() {
             </p>
           </div>
 
-          {/* ── Zeitgeist Hero — above the tabs ── */}
-          {activeTab !== "saved" && (
+          {/* ── Above-tabs module — context-aware ── */}
+          {activeTab === "saved" ? (
+            <SavedStatsPanel saved={saved} onExport={() => exportSavedMarkdown(saved)} onDiveDeep={(niche) => { handleDiveDeep(niche); setActiveTab("b2c"); }} onClearAll={() => { if (window.confirm("Clear all saved opportunities?")) setSaved([]); }} />
+          ) : (
             <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} onGoDiscover={() => setActiveTab("discover")} />
           )}
 
