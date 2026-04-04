@@ -1067,29 +1067,9 @@ function DiscoveryPanel({ onDiveDeep, onSave }) {
 
   return (
     <div>
-      {/* Zeitgeist CTA */}
-      <div style={{ marginBottom: 28 }}>
-        <button onClick={() => !busy && runZeitgeist()} disabled={busy}
-          style={{ width: "100%", padding: "22px 32px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}44`, borderRadius: 10, cursor: busy ? "default" : "pointer", textAlign: "left", transition: "border-color .2s, background .2s" }}
-          onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.background = `${accentDisc}18`; }}}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = accentDisc + "44"; e.currentTarget.style.background = `${accentDisc}0d`; }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
-                <span style={{ fontSize: 22 }}>✨</span>
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc }}>Scan the Zeitgeist</span>
-              </div>
-              <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 17, color: C.text, lineHeight: 1.4 }}>What does the internet want that nobody's built yet — right now, across every domain?</p>
-              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, marginTop: 6 }}>Returns 10 cross-domain opportunities ranked by signal strength</p>
-            </div>
-            {busy && mode === "zeitgeist" ? <Pulse color={accentDisc} /> : <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 20, color: accentDisc, marginLeft: 24 }}>{busy ? "" : "→"}</div>}
-          </div>
-        </button>
-      </div>
-
-      {/* Domain grid */}
+      {/* Domain deep-dive grid */}
       <div style={{ marginBottom: 8 }}>
-        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: C.muted, marginBottom: 12 }}>Or deep-dive a specific domain</div>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: C.muted, marginBottom: 12 }}>Deep-dive a specific domain</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(165px, 1fr))", gap: 8 }}>
           {DOMAINS.map(domain => (
             <button key={domain.id} onClick={() => !busy && runDomain(domain)} disabled={busy}
@@ -1963,9 +1943,9 @@ export default function Home() {
           {/* Tabs */}
           <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
             {[
+              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Zeitgeist · domain deep-dive" },
               { key: "b2c",      label: "B2C — Consumer Apps",  accent: C.accent,     sub: "App Store · consumer Reddit" },
               { key: "b2b",      label: "B2B — SaaS & Tools",   accent: C.accentB2B,  sub: "Professional communities · enterprise" },
-              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Zeitgeist · domain deep-dive" },
               { key: "saved",    label: "Saved",                 accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
             ].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
