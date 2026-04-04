@@ -227,14 +227,14 @@ async function synthesizeB2B(query, redditPosts, demandPosts, competitorReviews,
   return streamClaude(prompt, onChunk);
 }
 
-async function streamClaude(prompt, onChunk) {
+async function streamClaude(prompt, onChunk, maxTokens = 5000) {
   // Strip surrogate pairs and other problematic Unicode that breaks JSON encoding
   const safePrompt = prompt.replace(/[\uD800-\uDFFF]/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
 
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, stream: true, messages: [{ role: "user", content: safePrompt }] }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: maxTokens, stream: true, messages: [{ role: "user", content: safePrompt }] }),
   });
 
   if (!response.ok) {
@@ -832,9 +832,9 @@ Return JSON only, no markdown fences:
   ]
 }
 
-Return exactly 15 opportunities ordered by opportunityScore descending. Be specific — "AI-generated content authenticity verification for journalists" beats "content verification".`;
+Return exactly 10 opportunities ordered by opportunityScore descending. Be specific — "AI-generated content authenticity verification for journalists" beats "content verification".`;
 
-  return streamClaude(prompt, onChunk);
+  return streamClaude(prompt, onChunk, 8000);
 }
 
 async function synthesizeDiscovery(domain, onChunk) {
@@ -1027,7 +1027,7 @@ function DiscoveryPanel({ onDiveDeep, onSave }) {
                 <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc }}>Scan the Zeitgeist</span>
               </div>
               <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 17, color: C.text, lineHeight: 1.4 }}>What does the internet want that nobody's built yet — right now, across every domain?</p>
-              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, marginTop: 6 }}>Returns 15 cross-domain opportunities ranked by signal strength</p>
+              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, marginTop: 6 }}>Returns 10 cross-domain opportunities ranked by signal strength</p>
             </div>
             {busy && mode === "zeitgeist" ? <Pulse color={accentDisc} /> : <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 20, color: accentDisc, marginLeft: 24 }}>{busy ? "" : "→"}</div>}
           </div>
