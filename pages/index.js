@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Head from "next/head";
 
 const C = {
@@ -447,9 +447,18 @@ function Results({ result, appData, query, competitors, mode }) {
 // ── B2C Panel ──────────────────────────────────────────────────────────────
 function B2CPanel({ prefill, onPrefillConsumed }) {
   const [query, setQuery] = useState("");
+  const runRef = useRef(null);
 
-  // consume prefill from Discovery dive-deep
-  useState(() => { if (prefill) { setQuery(prefill); onPrefillConsumed?.(); } }, [prefill]);
+  // When Discovery passes a prefill, set it and auto-trigger analysis
+  useEffect(() => {
+    if (prefill) {
+      setQuery(prefill);
+      // small delay so query state settles before run fires
+      const t = setTimeout(() => { runRef.current?.(); }, 80);
+      onPrefillConsumed?.();
+      return () => clearTimeout(t);
+    }
+  }, [prefill]);
   const [competitors, setCompetitors] = useState([]);
   const [subreddits, setSubreddits] = useState([]);
   const [useCustomOnly, setUseCustomOnly] = useState(false);
@@ -882,76 +891,72 @@ function DiscoveryPanel({ onDiveDeep }) {
 
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
             {/* Table header */}
-            <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 80px 32px", gap: 0, padding: "10px 20px", borderBottom: `1px solid ${C.border}` }}>
-              {["Score", "Niche + Verdict", "Type", "Demand", "Competition", "Build Angle", ""].map((h, i) => (
+            <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px", gap: 0, padding: "10px 20px", borderBottom: `1px solid ${C.border}` }}>
+              {["Score", "Niche + Verdict", "Type", "Demand", "Competition", ""].map((h, i) => (
                 <div key={i} style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted }}>{h}</div>
               ))}
             </div>
 
             {/* Table rows */}
-            {result.opportunities.map((opp, i) => (
-              <div key={i}
-                onClick={() => onDiveDeep(opp.niche, opp.competitionLevel === "SATURATED" || opp.competitionLevel === "MODERATE" ? "b2c" : "b2c")}
-                style={{
-                  display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 80px 32px",
+            {result.opportunities.map((opp, i) => {
+              const [sent, setSent] = useState(false);
+              return (
+                <div key={i} style={{
+                  display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px",
                   gap: 0, padding: "16px 20px",
                   borderBottom: i < result.opportunities.length - 1 ? `1px solid ${C.border}` : "none",
-                  cursor: "pointer", transition: "background .15s",
-                }}
-                onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}08`}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                }}>
+                  {/* Score */}
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, paddingTop: 2 }}>
+                    {opp.opportunityScore}
+                  </div>
 
-                {/* Score */}
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, paddingTop: 2 }}>
-                  {opp.opportunityScore}
+                  {/* Niche + verdict */}
+                  <div style={{ paddingRight: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
+                    <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
+                    {opp.signalQuote && (
+                      <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 90)}{opp.signalQuote.length > 90 ? "…" : ""}"</div>
+                    )}
+                  </div>
+
+                  {/* Type */}
+                  <div style={{ paddingTop: 2 }}>
+                    <span style={{ display: "inline-block", fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 2, background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700 }}>{opp.type}</span>
+                  </div>
+
+                  {/* Demand */}
+                  <div style={{ paddingTop: 2 }}>
+                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: demandColor(opp.demandStrength), fontWeight: 600 }}>{opp.demandStrength}</span>
+                  </div>
+
+                  {/* Competition */}
+                  <div style={{ paddingTop: 2 }}>
+                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>{opp.competitionLevel}</span>
+                  </div>
+
+                  {/* Dive deep button */}
+                  <div style={{ display: "flex", alignItems: "flex-start", paddingTop: 1 }}>
+                    {sent ? (
+                      <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.green, letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 5 }}>
+                        ✓ Pre-filled B2C
+                      </span>
+                    ) : (
+                      <button onClick={() => { onDiveDeep(opp.niche); setSent(true); setTimeout(() => setSent(false), 3000); }}
+                        style={{ background: `${accentDisc}15`, border: `1px solid ${accentDisc}44`, color: accentDisc, cursor: "pointer", padding: "4px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "background .2s", whiteSpace: "nowrap" }}
+                        onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}30`}
+                        onMouseLeave={e => e.currentTarget.style.background = `${accentDisc}15`}>
+                        Dive Deep →
+                      </button>
+                    )}
+                  </div>
                 </div>
-
-                {/* Niche + verdict */}
-                <div style={{ paddingRight: 16 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
-                  <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
-                  {opp.signalQuote && (
-                    <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 80)}…"</div>
-                  )}
-                </div>
-
-                {/* Type */}
-                <div>
-                  <span style={{
-                    display: "inline-block", fontFamily: "'DM Mono', monospace", fontSize: 9,
-                    letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 2,
-                    background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`,
-                    color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700,
-                  }}>{opp.type}</span>
-                </div>
-
-                {/* Demand */}
-                <div>
-                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: demandColor(opp.demandStrength), fontWeight: 600 }}>
-                    {opp.demandStrength}
-                  </span>
-                </div>
-
-                {/* Competition */}
-                <div>
-                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>
-                    {opp.competitionLevel}
-                  </span>
-                </div>
-
-                {/* Build angle */}
-                <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.4, paddingRight: 8 }}>
-                  {opp.buildAngle?.slice(0, 60)}{opp.buildAngle?.length > 60 ? "…" : ""}
-                </div>
-
-                {/* Arrow */}
-                <div style={{ color: accentDisc, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>→</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>
-            Click any row to pre-fill the B2C or B2B tab for a full deep-dive analysis.
+            Hit "Dive Deep →" to pre-fill B2C tab, then switch tabs to run the full analysis. Your Discovery results stay here.
           </p>
         </div>
       )}
@@ -964,9 +969,9 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState("b2c");
   const [b2cPrefill, setB2cPrefill] = useState(null);
 
-  const handleDiveDeep = (niche, mode) => {
+  const handleDiveDeep = (niche) => {
     setB2cPrefill(niche);
-    setActiveTab(mode || "b2c");
+    // Don't switch tabs — let user navigate manually so Discovery results stay intact
   };
 
   return (
@@ -1030,10 +1035,16 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Active panel */}
-          {activeTab === "b2c" && <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} />}
-          {activeTab === "b2b" && <B2BPanel />}
-          {activeTab === "discover" && <DiscoveryPanel onDiveDeep={handleDiveDeep} />}
+          {/* Active panel — all kept mounted to preserve state */}
+          <div style={{ display: activeTab === "b2c" ? "block" : "none" }}>
+            <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} />
+          </div>
+          <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
+            <B2BPanel />
+          </div>
+          <div style={{ display: activeTab === "discover" ? "block" : "none" }}>
+            <DiscoveryPanel onDiveDeep={handleDiveDeep} />
+          </div>
 
           {/* Footer */}
           <div style={{ marginTop: 60, paddingTop: 20, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
