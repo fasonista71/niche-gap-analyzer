@@ -798,12 +798,6 @@ Return exactly 10 opportunities. Order by opportunityScore descending. Be specif
 }
 
 
-Order by opportunityScore descending.`;
-
-  return streamClaude(prompt, onChunk);
-}
-
-
 // ── Opportunity row -- must be a real component to use useState ────────────
 function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor, demandColor, compColor }) {
   const [sent, setSent] = useState(false);
