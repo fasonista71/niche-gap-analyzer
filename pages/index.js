@@ -743,49 +743,37 @@ const DISCOVERY_PATTERNS = [
 ];
 
 async function runDiscoverySweep(domain, onProgress) {
-  const subs = domain.subs.slice(0, 5).join("+"); // cap subs to avoid URL length issues
+  const subs = domain.subs.slice(0, 4).join("+");
 
-  // Helper: sequential fetch with delay to avoid Reddit rate limiting
-  const seqFetch = async (urls) => {
-    const results = [];
-    for (const url of urls) {
-      try {
-        const d = await redditFetch(url);
-        results.push((d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })));
-      } catch { results.push([]); }
-      await new Promise(r => setTimeout(r, 300)); // 300ms between requests
-    }
-    return results;
-  };
-
+  // Single consolidated Reddit search -- one request only to avoid 502s
   onProgress("Scanning Reddit for pain signals…");
-  const patternUrls = DISCOVERY_PATTERNS.slice(0, 3).map(pattern =>
-    `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(pattern)}&sort=relevance&limit=10&restrict_sr=true&t=year`
-  );
-  const queryUrls = domain.queries.slice(0, 2).map(q =>
-    `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(q + " problem")}&sort=relevance&limit=8&restrict_sr=true&t=year`
-  );
+  let posts = [];
+  try {
+    // Use a broad query that catches multiple pain patterns in one call
+    const broadQuery = `${domain.queries[0]} OR ${domain.queries[1]} problem OR "wish there was" OR "why isn't there"`;
+    const d = await redditFetch(
+      `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(broadQuery)}&sort=relevance&limit=25&restrict_sr=true&t=year`
+    );
+    const seen = new Set();
+    posts = (d?.data?.children || [])
+      .map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit }))
+      .filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; })
+      .sort((a, b) => b.score - a.score);
+  } catch {}
 
-  const allResults = await seqFetch([...patternUrls, ...queryUrls]);
-  const seen = new Set();
-  const posts = allResults.flat()
-    .filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 40);
-
-  // App Store top apps in category
-  onProgress("Pulling App Store category signals…");
+  // Single App Store sweep for the domain
+  onProgress("Pulling App Store + web tool signals…");
   let appReviews = [];
   try {
-    for (const q of domain.queries.slice(0, 2)) {
-      const s = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=software&limit=3&country=us`).then(r => r.json());
-      for (const app of (s?.results || []).slice(0, 2)) {
+    const s = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(domain.queries[0])}&entity=software&limit=3&country=us`).then(r => r.json());
+    for (const app of (s?.results || []).slice(0, 2)) {
+      try {
         const rv = await fetch(`https://itunes.apple.com/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`).then(r => r.json());
         const lowRated = (rv?.feed?.entry || []).slice(1)
           .map(e => ({ app: app.trackName, title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") }))
-          .filter(r => r.rating <= 2).slice(0, 4);
+          .filter(r => r.rating <= 2).slice(0, 3);
         appReviews = [...appReviews, ...lowRated];
-      }
+      } catch {}
     }
   } catch {}
 
@@ -793,16 +781,18 @@ async function runDiscoverySweep(domain, onProgress) {
 }
 
 async function synthesizeDiscovery(domain, posts, appReviews, onChunk) {
-  const redditSummary = posts.slice(0, 25).map(p =>
-    `[r/${p.subreddit} ↑${p.score}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 150)}` : ""}`
+  const redditSummary = posts.slice(0, 20).map(p =>
+    `[r/${p.subreddit} ↑${p.score}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 120)}` : ""}`
   ).join("\n");
 
-  const reviewSummary = appReviews.slice(0, 15).map(r =>
-    `[${r.app}] ★${r.rating} "${r.title}": ${r.content?.slice(0, 150)}`
+  const reviewSummary = appReviews.slice(0, 10).map(r =>
+    `[${r.app}] ★${r.rating} "${r.title}": ${r.content?.slice(0, 120)}`
   ).join("\n");
 
-  // Stage 1: identify candidate niches from the broad sweep
-  const candidatePrompt = `You are a product opportunity researcher. From these signals in the "${domain.label}" space, identify the 5 most specific candidate niches worth investigating.
+  onChunk("Identifying candidates…");
+
+  // Stage 1: Claude identifies 10 candidate niches from the sweep
+  const candidatePrompt = `You are a product opportunity researcher scanning the "${domain.label}" space.
 
 REDDIT SIGNALS:
 ${redditSummary || "None."}
@@ -810,80 +800,93 @@ ${redditSummary || "None."}
 APP STORE LOW-RATED REVIEWS:
 ${reviewSummary || "None."}
 
-Return JSON only, no markdown:
-{ "candidates": ["<specific niche 1>", "<specific niche 2>", "<specific niche 3>", "<specific niche 4>", "<specific niche 5>", "<specific niche 6>", "<specific niche 7>"] }
+Identify exactly 10 specific candidate niches worth investigating. Be specific and varied — avoid generic terms.
+Examples of good specificity: "sleep tracking for shift workers", "medication reminders for elderly with dementia", "expense splitting for freelance teams".
 
-Be specific: "sleep tracking for shift workers" beats "sleep tracking".`;
+Return JSON only:
+{ "candidates": ["<niche 1>", "<niche 2>", "<niche 3>", "<niche 4>", "<niche 5>", "<niche 6>", "<niche 7>", "<niche 8>", "<niche 9>", "<niche 10>"] }`;
 
-  let candidates = [];
+  let candidates = [...domain.queries, ...domain.queries.map(q => q + " for professionals")]; // safe fallback
   try {
-    const candidateRes = await fetch("/api/claude", {
+    const res = await fetch("/api/claude", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 300, messages: [{ role: "user", content: candidatePrompt }] }),
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 400, messages: [{ role: "user", content: candidatePrompt }] }),
     });
-    const candidateData = await candidateRes.json();
-    const candidateText = (candidateData.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-    candidates = JSON.parse(candidateText).candidates || [];
-  } catch { candidates = domain.queries; } // fallback to domain queries
+    const data = await res.json();
+    const text = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(text);
+    if (parsed.candidates?.length >= 5) candidates = parsed.candidates;
+  } catch {}
 
-  onChunk("Validating " + candidates.length + " candidate niches…");
+  onChunk(`Validating ${candidates.length} candidates against App Store + web tools…`);
 
-  // Stage 2: mini deep-dive on each candidate -- Reddit demand + App Store check
+  // Stage 2: validate each candidate with App Store + a web tool awareness check via Claude knowledge
+  // We do this in one batch Claude call rather than individual fetches to avoid rate limits
   const validations = [];
-  for (const niche of candidates.slice(0, 7)) {
-    try {
-      const [demandData, appData] = await Promise.all([
-        redditFetch(`https://www.reddit.com/search.json?q=${encodeURIComponent('"is there an app" ' + niche)}&sort=relevance&limit=8&t=all`),
-        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(niche)}&entity=software&limit=2&country=us`).then(r => r.json()),
-      ]);
-      const demandPosts = (demandData?.data?.children || []).map(p => ({ title: p.data.title, score: p.data.score }));
-      const apps = appData?.results || [];
-      validations.push({ niche, demandPosts, topApp: apps[0] ? `${apps[0].trackName} ★${apps[0].averageUserRating?.toFixed(1)} (${apps[0].userRatingCount?.toLocaleString()} reviews)` : "No App Store match found" });
-    } catch {
-      validations.push({ niche, demandPosts: [], topApp: "Could not check" });
-    }
-    await new Promise(r => setTimeout(r, 250));
+  const BATCH = 5; // validate 5 at a time with brief pauses
+
+  for (let i = 0; i < Math.min(candidates.length, 10); i += BATCH) {
+    const batch = candidates.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (niche) => {
+      try {
+        // Single App Store check per niche -- no Reddit call to avoid 502s
+        const appData = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(niche)}&entity=software&limit=3&country=us`).then(r => r.json());
+        const apps = (appData?.results || []).slice(0, 3);
+        const appSummary = apps.length > 0
+          ? apps.map(a => `${a.trackName} ★${a.averageUserRating?.toFixed(1)} (${a.userRatingCount?.toLocaleString()} reviews)`).join(", ")
+          : "No App Store match found";
+        validations.push({ niche, appSummary });
+      } catch {
+        validations.push({ niche, appSummary: "Could not check" });
+      }
+    }));
+    if (i + BATCH < candidates.length) await new Promise(r => setTimeout(r, 400));
   }
 
   const validationSummary = validations.map(v =>
-    `NICHE: "${v.niche}"\n  App Store: ${v.topApp}\n  Demand signals: ${v.demandPosts.length > 0 ? v.demandPosts.slice(0,3).map(p => `"${p.title}" ↑${p.score}`).join(" | ") : "none found"}`
+    `NICHE: "${v.niche}"\n  App Store apps found: ${v.appSummary}`
   ).join("\n\n");
 
-  // Stage 3: score with full context
-  const prompt = `You are a sharp product strategist. Score these validated opportunity candidates in the "${domain.label}" space.
+  // Stage 3: final scoring with full awareness of web/desktop tools
+  const prompt = `You are a sharp product strategist scoring opportunity candidates in the "${domain.label}" space.
 
-BROAD SWEEP SIGNALS (community context):
-${redditSummary.slice(0, 1500) || "None."}
+COMMUNITY SIGNALS (Reddit context):
+${redditSummary.slice(0, 1200) || "None."}
 
-VALIDATED CANDIDATES (App Store check + demand signals per niche):
+APP STORE VALIDATION (per candidate):
 ${validationSummary}
 
-For each candidate, use BOTH the broad context AND the validation data to score accurately.
-If App Store competition is strong AND demand signals are weak → score LOW.
-If App Store is weak/absent AND demand signals exist → score HIGH.
-These scores must be consistent with what a B2C deep-dive would find.
+CRITICAL INSTRUCTIONS:
+1. You have broad knowledge of web apps, SaaS tools, desktop apps, and browser extensions — not just App Store apps. When scoring, ACCOUNT FOR ALL EXISTING TOOLS including web-based tools (e.g. Notion, Airtable, Otter.ai), desktop apps, and Chrome extensions, not just mobile apps.
+2. If strong web/SaaS tools already exist for a niche (even if App Store is thin), competitionLevel should reflect that reality.
+3. A niche with strong App Store competition AND strong web tools = SATURATED.
+4. A niche where App Store is thin but Notion/Airtable/etc cover it = MODERATE competition at minimum.
+5. Scores must match what a full B2C deep-dive would return — be honest and conservative.
+6. Return EXACTLY 10 opportunities, one per candidate, even if some score low.
 
 Respond JSON only, no markdown:
 
 {
   "opportunities": [
     {
-      "niche": "<exact candidate niche name>",
-      "opportunityScore": <0-100, must reflect actual App Store competition and demand signal strength>,
+      "niche": "<exact candidate niche>",
+      "opportunityScore": <0-100>,
       "type": "<improve|whitespace>",
       "demandStrength": "<HIGH|MEDIUM|LOW>",
       "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
-      "verdict": "<one punchy honest sentence>",
-      "signalQuote": "<most compelling verbatim signal from the data>",
-      "buildAngle": "<one specific sentence on what to build>"
+      "knownTools": "<2-3 key existing tools including web/SaaS/desktop, or 'None identified'>",
+      "verdict": "<one honest sentence — is this a real gap or already covered?>",
+      "signalQuote": "<most compelling signal from Reddit data, or 'No direct signal found'>",
+      "buildAngle": "<one specific sentence on what would actually win here, or 'Opportunity too thin to recommend'>"
     }
   ]
 }
 
-Order by opportunityScore descending. Return 7-10 opportunities minimum so there's enough to paginate through.`;
+Order by opportunityScore descending.`;
 
   return streamClaude(prompt, onChunk);
 }
+
 
 // ── Opportunity row -- must be a real component to use useState ────────────
 function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor, demandColor, compColor }) {
@@ -900,8 +903,14 @@ function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor,
       <div style={{ paddingRight: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
         <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
-        {opp.signalQuote && (
-          <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 90)}{opp.signalQuote.length > 90 ? "…" : ""}"</div>
+        {opp.knownTools && opp.knownTools !== "None identified" && (
+          <div style={{ marginTop: 5, display: "flex", alignItems: "baseline", gap: 5 }}>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted }}>Existing:</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.orange }}>{opp.knownTools}</span>
+          </div>
+        )}
+        {opp.signalQuote && opp.signalQuote !== "No direct signal found" && (
+          <div style={{ marginTop: 5, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 90)}{opp.signalQuote.length > 90 ? "…" : ""}"</div>
         )}
       </div>
       <div style={{ paddingTop: 2 }}>
