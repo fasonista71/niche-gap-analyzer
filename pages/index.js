@@ -118,27 +118,15 @@ function exportHTML(query, competitors, result, appData, mode = "b2c") {
 
 // ── Data fetchers ──────────────────────────────────────────────────────────
 async function redditFetch(url) {
-  // Try proxy first
+  // Route through server-side proxy only — direct browser calls get CORS 429 from Reddit
   try {
     const res = await fetch(`/api/reddit?url=${encodeURIComponent(url)}`);
     if (res.ok) {
       const data = await res.json();
-      // If proxy got real results, use them
-      if (data?.data?.children?.length > 0) return data;
+      return data;
     }
   } catch {}
-
-  // Direct browser fallback — Reddit allows CORS on public JSON endpoints
-  try {
-    const directUrl = url.includes("?") ? url + "&raw_json=1" : url + "?raw_json=1";
-    const res = await fetch(directUrl, {
-      headers: { "Accept": "application/json" },
-      mode: "cors",
-    });
-    if (res.ok) return await res.json();
-  } catch {}
-
-  // Return empty structure so callers don't crash
+  // Return empty structure so callers degrade gracefully
   return { data: { children: [] } };
 }
 
@@ -240,10 +228,13 @@ async function synthesizeB2B(query, redditPosts, demandPosts, competitorReviews,
 }
 
 async function streamClaude(prompt, onChunk) {
+  // Strip surrogate pairs and other problematic Unicode that breaks JSON encoding
+  const safePrompt = prompt.replace(/[\uD800-\uDFFF]/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
+
   const response = await fetch("/api/claude", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, stream: true, messages: [{ role: "user", content: prompt }] }),
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, stream: true, messages: [{ role: "user", content: safePrompt }] }),
   });
 
   if (!response.ok) {
@@ -772,7 +763,7 @@ const DOMAINS = [
   { id: "finance",      label: "Personal Finance",     emoji: "💰", context: "budgeting, debt management, savings goals, investing for beginners, expense tracking, financial anxiety, subscription management, side income" },
   { id: "productivity", label: "Productivity & Work",  emoji: "⚡", context: "task management, ADHD focus tools, deep work, async communication, meeting overload, note-taking, time blocking, digital minimalism" },
   { id: "creator",      label: "Creator Tools",        emoji: "🎨", context: "content creation, video editing, podcasting, social media scheduling, audience growth, monetization, brand building, newsletter tools" },
-  { id: "parenting",    label: "Parenting & Family",   emoji: "👨‍👩‍👧", context: "baby tracking, child development, family coordination, screen time management, education support, special needs parenting, teen mental health" },
+  { id: "parenting",    label: "Parenting & Family",   emoji: "🧒", context: "baby tracking, child development, family coordination, screen time management, education support, special needs parenting, teen mental health" },
   { id: "travel",       label: "Travel & Adventure",   emoji: "✈️", context: "trip planning, solo travel, digital nomad life, budget travel, visa management, travel safety, sustainable travel, group trip coordination" },
   { id: "food",         label: "Food & Cooking",        emoji: "🍳", context: "meal planning, dietary restrictions, recipe management, grocery optimization, food waste, cooking skill building, restaurant discovery, nutrition tracking" },
   { id: "pets",         label: "Pets & Animals",        emoji: "🐾", context: "pet health tracking, training, veterinary care, pet sitting, senior pet care, exotic pets, multi-pet households, pet loss" },
