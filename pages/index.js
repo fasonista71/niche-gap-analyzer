@@ -118,8 +118,28 @@ function exportHTML(query, competitors, result, appData, mode = "b2c") {
 
 // ── Data fetchers ──────────────────────────────────────────────────────────
 async function redditFetch(url) {
-  const res = await fetch(`/api/reddit?url=${encodeURIComponent(url)}`);
-  return res.json();
+  // Try proxy first
+  try {
+    const res = await fetch(`/api/reddit?url=${encodeURIComponent(url)}`);
+    if (res.ok) {
+      const data = await res.json();
+      // If proxy got real results, use them
+      if (data?.data?.children?.length > 0) return data;
+    }
+  } catch {}
+
+  // Direct browser fallback — Reddit allows CORS on public JSON endpoints
+  try {
+    const directUrl = url.includes("?") ? url + "&raw_json=1" : url + "?raw_json=1";
+    const res = await fetch(directUrl, {
+      headers: { "Accept": "application/json" },
+      mode: "cors",
+    });
+    if (res.ok) return await res.json();
+  } catch {}
+
+  // Return empty structure so callers don't crash
+  return { data: { children: [] } };
 }
 
 async function fetchRedditSignals(query, customSubs = [], useCustomOnly = false) {
@@ -791,17 +811,15 @@ async function synthesizeDiscovery(domain, posts, appReviews, onChunk) {
 
   onChunk("Identifying candidates…");
 
-  // Stage 1: Claude identifies 10 candidate niches from the sweep
+  // Stage 1: Claude identifies 10 candidate niches from the sweep (or from domain knowledge if Reddit was empty)
   const candidatePrompt = `You are a product opportunity researcher scanning the "${domain.label}" space.
 
-REDDIT SIGNALS:
-${redditSummary || "None."}
+${redditSummary ? `REDDIT SIGNALS:\n${redditSummary}` : `No Reddit signals retrieved. Use your knowledge of the "${domain.label}" space to identify unmet needs.`}
 
-APP STORE LOW-RATED REVIEWS:
-${reviewSummary || "None."}
+${reviewSummary ? `APP STORE LOW-RATED REVIEWS:\n${reviewSummary}` : ""}
 
-Identify exactly 10 specific candidate niches worth investigating. Be specific and varied — avoid generic terms.
-Examples of good specificity: "sleep tracking for shift workers", "medication reminders for elderly with dementia", "expense splitting for freelance teams".
+Identify exactly 10 specific candidate niches worth investigating. Be specific and varied.
+Good examples: "sleep tracking for shift workers", "medication reminders for elderly with dementia", "expense splitting for freelance teams".
 
 Return JSON only:
 { "candidates": ["<niche 1>", "<niche 2>", "<niche 3>", "<niche 4>", "<niche 5>", "<niche 6>", "<niche 7>", "<niche 8>", "<niche 9>", "<niche 10>"] }`;
@@ -957,7 +975,9 @@ function DiscoveryPanel({ onDiveDeep }) {
       setPhase("fetching");
       const { posts, appReviews } = await runDiscoverySweep(domain, label => setPhaseLabel(label));
       setPhase("synthesizing");
-      setPhaseLabel(`Identifying + validating candidates in ${domain.label}…`);
+      setPhaseLabel(posts.length > 0
+        ? `Found ${posts.length} signals — validating 10 candidates…`
+        : `Reddit limited — running from domain knowledge…`);
       const analysis = await synthesizeDiscovery(domain, posts, appReviews, p => setStreamText(p));
       if (analysis) {
         setResult(analysis);
