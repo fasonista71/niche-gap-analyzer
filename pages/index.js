@@ -184,7 +184,57 @@ async function fetchCompetitorData(appName) {
   } catch { return { appName, appInfo: null, lowReviews: [], mentions: [] }; }
 }
 
-// B2B: fetch Reddit signals from professional subs
+// ── Competitive Landscape Map — deep side-by-side analysis ────────────────
+async function synthesizeCompetitiveLandscape(space, competitors, competitorData, onChunk) {
+  const competitorSection = competitorData.map(c => {
+    if (!c.appInfo) return `${c.appName}: Not found on App Store.`;
+    const reviews = c.lowReviews.map(r => `  ★${r.rating} "${r.title}": ${r.content?.slice(0,150)}`).join("\n") || "  No low-rated reviews.";
+    const mentions = c.mentions.map(m => `  [r/${m.subreddit} ↑${m.score}] "${m.title}"`).join("\n") || "  No Reddit mentions.";
+    return `${c.appInfo.name} by ${c.appInfo.developer}
+  Rating: ★${c.appInfo.rating?.toFixed(1)} from ${c.appInfo.reviewCount?.toLocaleString()} reviews
+  Price: ${c.appInfo.price || "Free"} · Category: ${c.appInfo.category}
+  Low-rated reviews:\n${reviews}
+  Reddit mentions:\n${mentions}`;
+  }).join("\n\n");
+
+  const prompt = `You are a sharp product strategist building a competitive landscape map for the "${space}" space.
+
+COMPETITOR DATA:
+${competitorSection}
+
+Produce a thorough competitive landscape analysis. For each competitor extract real signal from the review and Reddit data. Then identify the shared whitespace — what ALL of them fail to do well.
+
+Respond JSON only, no markdown:
+
+{
+  "space": "${space}",
+  "landscapeSummary": "<2-3 sentence overview of the competitive dynamics in this space>",
+  "competitors": [
+    {
+      "name": "<app name>",
+      "rating": <number>,
+      "reviewCount": <number>,
+      "price": "<price or Free>",
+      "strengthSummary": "<what they do genuinely well — be specific>",
+      "topComplaints": ["<complaint 1>", "<complaint 2>", "<complaint 3>"],
+      "missingFeatures": ["<feature 1>", "<feature 2>"],
+      "userSentiment": "<POSITIVE|MIXED|NEGATIVE>",
+      "vulnerabilityScore": <0-100>,
+      "targetUser": "<who this app is really built for>"
+    }
+  ],
+  "sharedWeaknesses": ["<weakness all share 1>", "<weakness all share 2>", "<weakness all share 3>"],
+  "whitespaceOpportunity": "<the single most compelling gap that none of them solve — be specific and actionable>",
+  "winningAngle": "<if you were building a competitor, what would you do differently to beat all of them>",
+  "marketMaturity": "<EMERGING|GROWING|MATURE|SATURATED>",
+  "priceGap": "<is there a pricing tier nobody is serving well? describe it or say 'None identified'>",
+  "recommendedPositioning": "<one-liner positioning statement for a new entrant>"
+}`;
+
+  return streamClaude(prompt, onChunk, 5000);
+}
+
+
 async function fetchB2BRedditSignals(query, customSubs = [], useCustomOnly = false) {
   const defaultSubs = ["sysadmin", "entrepreneur", "smallbusiness", "sales", "marketing", "projectmanagement", "devops", "humanresources"];
   const subs = useCustomOnly && customSubs.length > 0 ? customSubs : customSubs.length > 0 ? [...customSubs, ...defaultSubs] : defaultSubs;
@@ -635,6 +685,9 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
           </div>
         </div>
       )}
+
+      {/* Competitive Landscape Map */}
+      <CompetitiveLandscapePanel onSave={onSave} />
     </div>
   );
 }
@@ -1162,6 +1215,251 @@ function DiscoveryPanel({ onDiveDeep, onSave }) {
 }
 
 
+// ── Competitive Landscape Panel ────────────────────────────────────────────
+function CompetitiveLandscapePanel({ onSave }) {
+  const [space, setSpace] = useState("");
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [competitors, setCompetitors] = useState([]);
+  const [phase, setPhase] = useState("idle");
+  const [result, setResult] = useState(null);
+  const [streamText, setStreamText] = useState("");
+  const [errorDetail, setErrorDetail] = useState("");
+  const accentLand = "#47ffb2"; // green for landscape
+
+  const addCompetitor = () => {
+    const v = competitorInput.trim();
+    if (!v || competitors.length >= 5 || competitors.includes(v)) return;
+    setCompetitors(c => [...c, v]);
+    setCompetitorInput("");
+  };
+
+  const removeCompetitor = (name) => setCompetitors(c => c.filter(x => x !== name));
+
+  const run = async () => {
+    if (!space.trim() || competitors.length < 2) return;
+    setResult(null); setStreamText(""); setErrorDetail("");
+    try {
+      setPhase("fetching");
+      const competitorData = await Promise.all(competitors.map(c => fetchCompetitorData(c)));
+      setPhase("synthesizing");
+      const analysis = await synthesizeCompetitiveLandscape(space, competitors, competitorData, p => setStreamText(p));
+      if (analysis) { setResult(analysis); setPhase("done"); }
+      else { setErrorDetail("Analysis returned empty."); setPhase("error"); }
+    } catch (e) { setErrorDetail(e?.message || String(e)); setPhase("error"); }
+  };
+
+  const clear = () => { setSpace(""); setCompetitors([]); setPhase("idle"); setResult(null); setStreamText(""); setErrorDetail(""); };
+  const busy = phase === "fetching" || phase === "synthesizing";
+
+  const vulnColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
+  const sentColor = s => s === "POSITIVE" ? C.green : s === "NEGATIVE" ? C.red : C.orange;
+  const maturityColor = m => m === "EMERGING" ? C.green : m === "GROWING" ? C.accent : m === "MATURE" ? C.orange : C.red;
+
+  return (
+    <div style={{ marginTop: 48, paddingTop: 40, borderTop: `1px solid ${C.border}` }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 20 }}>
+        <h2 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentLand }}>
+          Competitive Landscape Map
+        </h2>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>— full side-by-side analysis of up to 5 competitors</span>
+      </div>
+
+      {/* Inputs */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+        {/* Space input */}
+        <div style={{ display: "flex", border: `1px solid ${busy ? accentLand : C.borderLit}`, borderRadius: 6, overflow: "hidden", transition: "border-color .3s" }}>
+          <span style={{ padding: "12px 16px", fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase", borderRight: `1px solid ${C.border}`, display: "flex", alignItems: "center", whiteSpace: "nowrap" }}>
+            Space
+          </span>
+          <input value={space} onChange={e => setSpace(e.target.value)} onKeyDown={e => e.key === "Enter" && addCompetitor()}
+            placeholder="e.g. meditation apps, project management, invoicing tools…"
+            style={{ flex: 1, background: C.surface, border: "none", outline: "none", color: C.text, fontSize: 14, padding: "12px 16px", fontFamily: "'DM Sans', sans-serif" }}/>
+        </div>
+
+        {/* Competitor chip input */}
+        <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ flex: 1, display: "flex", border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", background: C.surface }}>
+            <span style={{ padding: "10px 14px", fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase", whiteSpace: "nowrap", borderRight: `1px solid ${C.border}`, display: "flex", alignItems: "center" }}>
+              + competitor
+            </span>
+            <input value={competitorInput} onChange={e => setCompetitorInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addCompetitor()}
+              placeholder={competitors.length >= 5 ? "Max 5 reached" : "e.g. Calm, Headspace, Insight Timer…"}
+              disabled={competitors.length >= 5}
+              style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: C.text, fontSize: 13, padding: "10px 14px", fontFamily: "'DM Sans', sans-serif" }}/>
+          </div>
+          <button onClick={addCompetitor} disabled={!competitorInput.trim() || competitors.length >= 5}
+            style={{ background: competitorInput.trim() && competitors.length < 5 ? C.borderLit : C.border, color: C.text, border: "none", cursor: "pointer", padding: "10px 16px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Add</button>
+        </div>
+
+        {/* Chips */}
+        {competitors.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {competitors.map(name => (
+              <div key={name} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: C.surface, border: `1px solid ${accentLand}44`, borderRadius: 4, padding: "4px 10px" }}>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: accentLand }}>{name}</span>
+                <button onClick={() => removeCompetitor(name)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+              </div>
+            ))}
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>{5 - competitors.length} slots remaining · minimum 2</span>
+          </div>
+        )}
+
+        {/* Run button */}
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={run} disabled={!space.trim() || competitors.length < 2 || busy}
+            style={{ background: space.trim() && competitors.length >= 2 && !busy ? accentLand : C.muted, color: C.bg, border: "none", cursor: space.trim() && competitors.length >= 2 && !busy ? "pointer" : "default", padding: "12px 28px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", transition: "background .2s" }}>
+            {busy ? <Pulse color={C.bg} /> : "Map the Landscape"}
+          </button>
+          {(phase === "done" || phase === "error") && (
+            <button onClick={clear} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "12px 20px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "color .2s, border-color .2s" }}
+              onMouseEnter={e => { e.currentTarget.style.color = C.red; e.currentTarget.style.borderColor = C.red; }}
+              onMouseLeave={e => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = C.border; }}>
+              ✕ Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Status */}
+      {busy && (
+        <div style={{ padding: "16px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+          <Pulse color={accentLand} />
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: C.textDim }}>
+            {phase === "fetching" ? `Fetching data for ${competitors.length} competitors…` : "Building landscape map…"}
+          </span>
+        </div>
+      )}
+      {phase === "synthesizing" && streamText && (
+        <div style={{ padding: "14px 18px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 100, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 60%,transparent)", marginBottom: 12 }}>{streamText.slice(-400)}</div>
+      )}
+      {phase === "error" && (
+        <div style={{ padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12, marginBottom: 12 }}>
+          Analysis failed. {errorDetail && <span style={{ color: C.textDim }}>{errorDetail}</span>}
+        </div>
+      )}
+
+      {/* Results */}
+      {phase === "done" && result && (
+        <div style={{ animation: "fadeUp .5s ease both" }}>
+
+          {/* Summary + meta */}
+          <div style={{ padding: "20px 24px", background: C.surface, border: `1px solid ${accentLand}44`, borderRadius: 8, marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+              {result.marketMaturity && (
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.bg, background: maturityColor(result.marketMaturity), padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+                  {result.marketMaturity}
+                </span>
+              )}
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.bg, background: accentLand, padding: "2px 8px", borderRadius: 2, fontWeight: 700 }}>
+                {result.competitors?.length} Competitors Mapped
+              </span>
+            </div>
+            <p style={{ fontSize: 14, color: C.textDim, lineHeight: 1.7, marginBottom: result.recommendedPositioning ? 16 : 0 }}>{result.landscapeSummary}</p>
+            {result.recommendedPositioning && (
+              <div style={{ padding: "10px 14px", background: `${accentLand}0d`, border: `1px solid ${accentLand}22`, borderRadius: 5, marginTop: 12 }}>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: accentLand, display: "block", marginBottom: 4 }}>Recommended Positioning</span>
+                <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 15, lineHeight: 1.5, fontStyle: "italic" }}>"{result.recommendedPositioning}"</p>
+              </div>
+            )}
+          </div>
+
+          {/* Competitor cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12, marginBottom: 16 }}>
+            {result.competitors?.map((c, i) => (
+              <div key={i} style={{ padding: "18px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                {/* Card header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 3 }}>{c.name}</div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>{c.price} · ★{c.rating?.toFixed(1)} · {c.reviewCount?.toLocaleString()} reviews</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: vulnColor(c.vulnerabilityScore), lineHeight: 1 }}>{c.vulnerabilityScore}</div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>vuln</div>
+                  </div>
+                </div>
+
+                {/* Sentiment tag */}
+                <div style={{ marginBottom: 10 }}>
+                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: sentColor(c.userSentiment), border: `1px solid ${sentColor(c.userSentiment)}44`, padding: "2px 7px", borderRadius: 2 }}>{c.userSentiment}</span>
+                  {c.targetUser && <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, marginLeft: 8 }}>for {c.targetUser}</span>}
+                </div>
+
+                {/* Strength */}
+                {c.strengthSummary && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: C.green, marginBottom: 4 }}>Strength</div>
+                    <p style={{ fontSize: 12, color: C.textDim, lineHeight: 1.5 }}>{c.strengthSummary}</p>
+                  </div>
+                )}
+
+                {/* Complaints */}
+                {c.topComplaints?.length > 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: C.red, marginBottom: 6 }}>Top Complaints</div>
+                    {c.topComplaints.map((complaint, j) => (
+                      <div key={j} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "flex-start" }}>
+                        <span style={{ color: C.red, fontSize: 10, flexShrink: 0, marginTop: 2 }}>⚠</span>
+                        <span style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{complaint}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Missing features */}
+                {c.missingFeatures?.length > 0 && (
+                  <div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: C.orange, marginBottom: 6 }}>Missing</div>
+                    {c.missingFeatures.map((f, j) => (
+                      <div key={j} style={{ display: "flex", gap: 6, marginBottom: 4, alignItems: "flex-start" }}>
+                        <span style={{ color: C.orange, fontSize: 11, flexShrink: 0 }}>→</span>
+                        <span style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{f}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Shared weaknesses + whitespace */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+            <div style={{ padding: "18px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: C.red, marginBottom: 14 }}>Shared Weaknesses</h3>
+              {result.sharedWeaknesses?.map((w, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, marginBottom: 10, alignItems: "flex-start" }}>
+                  <span style={{ color: C.red, fontSize: 12, flexShrink: 0 }}>⚠</span>
+                  <span style={{ fontSize: 13, color: C.textDim, lineHeight: 1.5 }}>{w}</span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ padding: "18px 20px", background: `${accentLand}0a`, border: `1px solid ${accentLand}44`, borderRadius: 8 }}>
+              <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentLand, marginBottom: 12 }}>Whitespace Opportunity</h3>
+              <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 15, lineHeight: 1.6, fontStyle: "italic", color: C.text }}>"{result.whitespaceOpportunity}"</p>
+              {result.priceGap && result.priceGap !== "None identified" && (
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${accentLand}22` }}>
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: accentLand, marginBottom: 5 }}>Price Gap</div>
+                  <p style={{ fontSize: 12, color: C.textDim, lineHeight: 1.5 }}>{result.priceGap}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Winning angle */}
+          {result.winningAngle && (
+            <div style={{ padding: "18px 22px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: C.textDim, marginBottom: 10 }}>Winning Angle</h3>
+              <p style={{ fontSize: 14, lineHeight: 1.7, color: C.text }}>{result.winningAngle}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Saved opportunities scratchpad ─────────────────────────────────────────
 function exportSavedMarkdown(saved) {
   const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
@@ -1305,6 +1603,135 @@ function SavedPanel({ saved, onRemove, onNoteChange }) {
   );
 }
 
+// ── Zeitgeist Hero — persistent above-the-tabs entry point ────────────────
+function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
+  const [phase, setPhase] = useState("idle");
+  const [result, setResult] = useState(null);
+  const [streamText, setStreamText] = useState("");
+  const [domainFilter, setDomainFilter] = useState(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 5;
+  const accentDisc = "#ff6bff";
+
+  const run = async () => {
+    if (phase === "synthesizing") return;
+    setResult(null); setStreamText(""); setDomainFilter(null); setPage(0);
+    setPhase("synthesizing");
+    try {
+      const analysis = await synthesizeZeitgeist(p => setStreamText(p));
+      if (analysis) { setResult(analysis); setPhase("done"); }
+      else setPhase("error");
+    } catch (e) { console.error(e); setPhase("error"); }
+  };
+
+  const busy = phase === "synthesizing";
+  const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
+  const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
+  const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
+
+  const allOpps = result?.opportunities || [];
+  const filteredOpps = domainFilter ? allOpps.filter(o => o.domain === domainFilter) : allOpps;
+  const totalPages = Math.ceil(filteredOpps.length / PAGE_SIZE);
+  const pageOpps = filteredOpps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const domainCounts = allOpps.reduce((acc, o) => { acc[o.domain] = (acc[o.domain] || 0) + 1; return acc; }, {});
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      {/* The main CTA button */}
+      <button onClick={() => !busy && run()} disabled={busy}
+        style={{
+          width: "100%", padding: "20px 28px",
+          background: busy ? `${accentDisc}12` : `${accentDisc}08`,
+          border: `1px solid ${busy ? accentDisc : accentDisc + "44"}`,
+          borderRadius: 10, cursor: busy ? "default" : "pointer",
+          transition: "border-color .2s, background .2s", marginBottom: 0,
+        }}
+        onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.background = `${accentDisc}14`; }}}
+        onMouseLeave={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "44"; e.currentTarget.style.background = `${accentDisc}08`; }}}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span style={{ fontSize: 24 }}>✨</span>
+            <div style={{ textAlign: "left" }}>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc, marginBottom: 3 }}>
+                Scan the Zeitgeist
+              </div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
+                What does the market want right now that nobody's built? · Cross-domain · AI-powered
+              </div>
+            </div>
+          </div>
+          {busy ? <Pulse color={accentDisc} /> : (
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, color: accentDisc }}>→</div>
+          )}
+        </div>
+      </button>
+
+      {/* Streaming preview */}
+      {phase === "synthesizing" && streamText && (
+        <div style={{ marginTop: 8, padding: "12px 16px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 80, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 50%,transparent)" }}>{streamText.slice(-300)}</div>
+      )}
+
+      {/* Results */}
+      {phase === "done" && allOpps.length > 0 && (
+        <div style={{ marginTop: 12, animation: "fadeUp .4s ease both" }}>
+          {/* Filter chips */}
+          {Object.keys(domainCounts).length > 1 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              <button onClick={() => { setDomainFilter(null); setPage(0); }}
+                style={{ background: !domainFilter ? accentDisc : C.surface, color: !domainFilter ? C.bg : C.textDim, border: `1px solid ${!domainFilter ? accentDisc : C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                All {allOpps.length}
+              </button>
+              {Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).map(([domain, count]) => {
+                const d = DOMAINS.find(x => x.label === domain);
+                return (
+                  <button key={domain} onClick={() => { setDomainFilter(domain); setPage(0); }}
+                    style={{ background: domainFilter === domain ? `${accentDisc}22` : C.surface, color: domainFilter === domain ? accentDisc : C.textDim, border: `1px solid ${domainFilter === domain ? accentDisc + "55" : C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    {d?.emoji} {domain.split(" ")[0]} {count}
+                  </button>
+                );
+              })}
+              <button onClick={run} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", marginLeft: "auto" }}>
+                ↻ Rescan
+              </button>
+            </div>
+          )}
+
+          {/* Compact table */}
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 70px 80px 90px 150px", gap: 0, padding: "8px 18px", borderBottom: `1px solid ${C.border}` }}>
+              {["Score", "Niche", "Type", "Demand", "Competition", ""].map((h, i) => (
+                <div key={i} style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>{h}</div>
+              ))}
+            </div>
+            {pageOpps.map((opp, i) => (
+              <OpportunityRow key={`hero-${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
+                onDiveDeep={onDiveDeep} onSave={onSave} accentDisc={accentDisc}
+                scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+                style={{ background: C.surface, border: `1px solid ${C.border}`, color: page === 0 ? C.muted : C.text, cursor: page === 0 ? "default" : "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700 }}>←</button>
+              {Array.from({ length: totalPages }, (_, i) => (
+                <button key={i} onClick={() => setPage(i)}
+                  style={{ background: page === i ? accentDisc : C.surface, border: `1px solid ${page === i ? accentDisc : C.border}`, color: page === i ? C.bg : C.textDim, cursor: "pointer", padding: "5px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700 }}>
+                  {i + 1}
+                </button>
+              ))}
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page === totalPages - 1}
+                style={{ background: C.surface, border: `1px solid ${C.border}`, color: page === totalPages - 1 ? C.muted : C.text, cursor: page === totalPages - 1 ? "default" : "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700 }}>→</button>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, marginLeft: 4 }}>{filteredOpps.length} results</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Home() {
   const [activeTab, setActiveTab] = useState("b2c");
@@ -1348,24 +1775,29 @@ export default function Home() {
         <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
 
           {/* Header */}
-          <div style={{ marginBottom: 40, animation: "fadeUp .6s ease both" }}>
+          <div style={{ marginBottom: 32, animation: "fadeUp .6s ease both" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 4, background: activeTab === "b2b" ? C.accentB2B : C.accent, display: "flex", alignItems: "center", justifyContent: "center", transition: "background .3s" }}>
+              <div style={{ width: 32, height: 32, borderRadius: 4, background: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, display: "flex", alignItems: "center", justifyContent: "center", transition: "background .3s" }}>
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                   <circle cx="7" cy="7" r="5" stroke={C.bg} strokeWidth="2"/>
                   <path d="M11 11l4 4" stroke={C.bg} strokeWidth="2" strokeLinecap="round"/>
                   <path d="M7 4v6M4 7h6" stroke={C.bg} strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
               </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
             </div>
             <h1 style={{ fontFamily: "'Instrument Serif', serif", fontSize: "clamp(32px,5vw,52px)", fontWeight: 400, lineHeight: 1.1, marginBottom: 12 }}>
-              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
+              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
-            <p style={{ color: C.textDim, fontSize: 15, maxWidth: 500, lineHeight: 1.6 }}>
-              Validate a niche in B2C or B2B mode, or run Discovery to scan an entire domain for the strongest unmet needs.
+            <p style={{ color: C.textDim, fontSize: 15, maxWidth: 520, lineHeight: 1.6 }}>
+              Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis. Start with the Zeitgeist scan or validate a specific niche.
             </p>
           </div>
+
+          {/* ── Zeitgeist Hero — above the tabs ── */}
+          {activeTab !== "saved" && (
+            <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} onGoDiscover={() => setActiveTab("discover")} />
+          )}
 
           {/* Tabs */}
           <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
