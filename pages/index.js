@@ -741,164 +741,62 @@ function B2BPanel() {
 
 // ── Discovery domain config ────────────────────────────────────────────────
 const DOMAINS = [
-  { id: "health",      label: "Health & Wellness",    emoji: "🏃", subs: ["loseit","fitness","mentalhealth","sleep","nutrition","meditation","running","swimming"], appCategory: "Health & Fitness",   queries: ["symptom tracker","mental wellness","sleep aid","chronic illness","workout planner"] },
-  { id: "finance",     label: "Personal Finance",     emoji: "💰", subs: ["personalfinance","frugal","financialindependence","investing","povertyfinance","debtfree"], appCategory: "Finance",           queries: ["budget tracker","expense splitting","debt payoff","savings goal","subscription tracker"] },
-  { id: "productivity",label: "Productivity & Work",  emoji: "⚡", subs: ["productivity","ADHD","getdisciplined","selfimprovement","nosurf","digitalminimalism"], appCategory: "Productivity",       queries: ["task management","focus timer","habit tracker","note taking","time blocking"] },
-  { id: "creator",     label: "Creator Tools",        emoji: "🎨", subs: ["juststart","youtubers","podcasting","content_marketing","NewTubers","graphic_design"], appCategory: "Photo & Video",     queries: ["content calendar","video editing","thumbnail maker","social media scheduler","audience analytics"] },
-  { id: "parenting",   label: "Parenting & Family",   emoji: "👨‍👩‍👧", subs: ["Parenting","daddit","Mommit","beyondthebump","SingleParents","autism"], appCategory: "Lifestyle",           queries: ["baby tracker","chore chart","family calendar","screen time","homework helper"] },
-  { id: "travel",      label: "Travel & Adventure",   emoji: "✈️", subs: ["travel","solotravel","digitalnomad","backpacking","roadtrip","camping"], appCategory: "Travel",             queries: ["trip planner","packing list","travel budget","visa tracker","offline maps"] },
-  { id: "food",        label: "Food & Cooking",        emoji: "🍳", subs: ["MealPrepSunday","EatCheapAndHealthy","recipes","veganrecipes","keto","intermittentfasting"], appCategory: "Food & Drink",    queries: ["meal planner","recipe manager","grocery list","calorie tracker","restaurant finder"] },
-  { id: "pets",        label: "Pets & Animals",        emoji: "🐾", subs: ["dogs","cats","puppy101","DogAdvice","AskVet","petadvice"], appCategory: "Lifestyle",           queries: ["pet health tracker","vet reminder","dog training","pet medication","pet sitter"] },
-  { id: "learning",    label: "Learning & Education",  emoji: "📚", subs: ["learnprogramming","languagelearning","IWantToLearn","GetStudying","slatestarcodex"], appCategory: "Education",          queries: ["language learning","flashcard maker","study planner","online courses","skill tracker"] },
-  { id: "home",        label: "Home & Real Estate",    emoji: "🏠", subs: ["FirstTimeHomeBuyer","HomeImprovement","malelivingspace","femalelivingspace","IKEA","DIY"], appCategory: "Lifestyle",       queries: ["home inventory","rent tracker","home maintenance","interior design","moving checklist"] },
+  { id: "health",       label: "Health & Wellness",    emoji: "🏃", context: "personal health tracking, mental wellness, chronic conditions, sleep, nutrition, fitness, meditation, womens health, preventive care" },
+  { id: "finance",      label: "Personal Finance",     emoji: "💰", context: "budgeting, debt management, savings goals, investing for beginners, expense tracking, financial anxiety, subscription management, side income" },
+  { id: "productivity", label: "Productivity & Work",  emoji: "⚡", context: "task management, ADHD focus tools, deep work, async communication, meeting overload, note-taking, time blocking, digital minimalism" },
+  { id: "creator",      label: "Creator Tools",        emoji: "🎨", context: "content creation, video editing, podcasting, social media scheduling, audience growth, monetization, brand building, newsletter tools" },
+  { id: "parenting",    label: "Parenting & Family",   emoji: "👨‍👩‍👧", context: "baby tracking, child development, family coordination, screen time management, education support, special needs parenting, teen mental health" },
+  { id: "travel",       label: "Travel & Adventure",   emoji: "✈️", context: "trip planning, solo travel, digital nomad life, budget travel, visa management, travel safety, sustainable travel, group trip coordination" },
+  { id: "food",         label: "Food & Cooking",        emoji: "🍳", context: "meal planning, dietary restrictions, recipe management, grocery optimization, food waste, cooking skill building, restaurant discovery, nutrition tracking" },
+  { id: "pets",         label: "Pets & Animals",        emoji: "🐾", context: "pet health tracking, training, veterinary care, pet sitting, senior pet care, exotic pets, multi-pet households, pet loss" },
+  { id: "learning",     label: "Learning & Education",  emoji: "📚", context: "skill acquisition, language learning, online courses, self-directed learning, career transition, professional certification, reading habits, memory retention" },
+  { id: "home",         label: "Home & Real Estate",    emoji: "🏠", context: "home buying, renting, home maintenance, interior design, decluttering, smart home, moving, home inventory, landlord-tenant" },
 ];
 
-const DISCOVERY_PATTERNS = [
-  `"I wish there was an app"`,
-  `"why isn't there an app"`,
-  `"does anyone know a good app"`,
-  `"nothing works for"`,
-  `"frustrated with" app`,
-  `"is there anything that"`,
-];
+// ── Discovery: pure Claude knowledge scan, no external APIs ───────────────
+async function synthesizeDiscovery(domain, onChunk) {
+  onChunk("Scanning for opportunities…");
 
-async function runDiscoverySweep(domain, onProgress) {
-  const subs = domain.subs.slice(0, 4).join("+");
+  const prompt = `You are a sharp product strategist with deep knowledge of the app and SaaS landscape. Your job is to identify the most compelling unmet needs in the "${domain.label}" space as of 2024-2025.
 
-  // Single consolidated Reddit search -- one request only to avoid 502s
-  onProgress("Scanning Reddit for pain signals…");
-  let posts = [];
-  try {
-    // Use a broad query that catches multiple pain patterns in one call
-    const broadQuery = `${domain.queries[0]} OR ${domain.queries[1]} problem OR "wish there was" OR "why isn't there"`;
-    const d = await redditFetch(
-      `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(broadQuery)}&sort=relevance&limit=25&restrict_sr=true&t=year`
-    );
-    const seen = new Set();
-    posts = (d?.data?.children || [])
-      .map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit }))
-      .filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; })
-      .sort((a, b) => b.score - a.score);
-  } catch {}
+DOMAIN CONTEXT: ${domain.context}
 
-  // Single App Store sweep for the domain
-  onProgress("Pulling App Store + web tool signals…");
-  let appReviews = [];
-  try {
-    const s = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(domain.queries[0])}&entity=software&limit=3&country=us`).then(r => r.json());
-    for (const app of (s?.results || []).slice(0, 2)) {
-      try {
-        const rv = await fetch(`https://itunes.apple.com/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`).then(r => r.json());
-        const lowRated = (rv?.feed?.entry || []).slice(1)
-          .map(e => ({ app: app.trackName, title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") }))
-          .filter(r => r.rating <= 2).slice(0, 3);
-        appReviews = [...appReviews, ...lowRated];
-      } catch {}
-    }
-  } catch {}
+Your task: identify 10 specific, validated opportunity niches in this space. For each one:
+- Consider ALL existing solutions: mobile apps, web apps, SaaS tools, desktop software, browser extensions, AI tools
+- Be brutally honest about competition — if Notion, Airtable, or any well-known tool covers it, say so
+- Focus on gaps that are genuinely underserved, not just "nobody built a pretty version of X"
+- Weight toward niches where demand is clearly expressed but supply is fragmented, expensive, or poorly executed
+- Favor niches that have emerged or grown significantly in 2023-2025 (new behaviors, new pain points)
 
-  return { posts, appReviews };
-}
+Scoring rules:
+- opportunityScore 70+: Real gap, clear demand, weak or absent solutions
+- opportunityScore 45-69: Real demand but meaningful competition exists, differentiation is possible
+- opportunityScore below 45: Saturated or demand is too diffuse
+- Be conservative — it's better to score honestly low than give false hope
 
-async function synthesizeDiscovery(domain, posts, appReviews, onChunk) {
-  const redditSummary = posts.slice(0, 20).map(p =>
-    `[r/${p.subreddit} ↑${p.score}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 120)}` : ""}`
-  ).join("\n");
-
-  const reviewSummary = appReviews.slice(0, 10).map(r =>
-    `[${r.app}] ★${r.rating} "${r.title}": ${r.content?.slice(0, 120)}`
-  ).join("\n");
-
-  onChunk("Identifying candidates…");
-
-  // Stage 1: Claude identifies 10 candidate niches from the sweep (or from domain knowledge if Reddit was empty)
-  const candidatePrompt = `You are a product opportunity researcher scanning the "${domain.label}" space.
-
-${redditSummary ? `REDDIT SIGNALS:\n${redditSummary}` : `No Reddit signals retrieved. Use your knowledge of the "${domain.label}" space to identify unmet needs.`}
-
-${reviewSummary ? `APP STORE LOW-RATED REVIEWS:\n${reviewSummary}` : ""}
-
-Identify exactly 10 specific candidate niches worth investigating. Be specific and varied.
-Good examples: "sleep tracking for shift workers", "medication reminders for elderly with dementia", "expense splitting for freelance teams".
-
-Return JSON only:
-{ "candidates": ["<niche 1>", "<niche 2>", "<niche 3>", "<niche 4>", "<niche 5>", "<niche 6>", "<niche 7>", "<niche 8>", "<niche 9>", "<niche 10>"] }`;
-
-  let candidates = [...domain.queries, ...domain.queries.map(q => q + " for professionals")]; // safe fallback
-  try {
-    const res = await fetch("/api/claude", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 400, messages: [{ role: "user", content: candidatePrompt }] }),
-    });
-    const data = await res.json();
-    const text = (data.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(text);
-    if (parsed.candidates?.length >= 5) candidates = parsed.candidates;
-  } catch {}
-
-  onChunk(`Validating ${candidates.length} candidates against App Store + web tools…`);
-
-  // Stage 2: validate each candidate with App Store + a web tool awareness check via Claude knowledge
-  // We do this in one batch Claude call rather than individual fetches to avoid rate limits
-  const validations = [];
-  const BATCH = 5; // validate 5 at a time with brief pauses
-
-  for (let i = 0; i < Math.min(candidates.length, 10); i += BATCH) {
-    const batch = candidates.slice(i, i + BATCH);
-    await Promise.all(batch.map(async (niche) => {
-      try {
-        // Single App Store check per niche -- no Reddit call to avoid 502s
-        const appData = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(niche)}&entity=software&limit=3&country=us`).then(r => r.json());
-        const apps = (appData?.results || []).slice(0, 3);
-        const appSummary = apps.length > 0
-          ? apps.map(a => `${a.trackName} ★${a.averageUserRating?.toFixed(1)} (${a.userRatingCount?.toLocaleString()} reviews)`).join(", ")
-          : "No App Store match found";
-        validations.push({ niche, appSummary });
-      } catch {
-        validations.push({ niche, appSummary: "Could not check" });
-      }
-    }));
-    if (i + BATCH < candidates.length) await new Promise(r => setTimeout(r, 400));
-  }
-
-  const validationSummary = validations.map(v =>
-    `NICHE: "${v.niche}"\n  App Store apps found: ${v.appSummary}`
-  ).join("\n\n");
-
-  // Stage 3: final scoring with full awareness of web/desktop tools
-  const prompt = `You are a sharp product strategist scoring opportunity candidates in the "${domain.label}" space.
-
-COMMUNITY SIGNALS (Reddit context):
-${redditSummary.slice(0, 1200) || "None."}
-
-APP STORE VALIDATION (per candidate):
-${validationSummary}
-
-CRITICAL INSTRUCTIONS:
-1. You have broad knowledge of web apps, SaaS tools, desktop apps, and browser extensions — not just App Store apps. When scoring, ACCOUNT FOR ALL EXISTING TOOLS including web-based tools (e.g. Notion, Airtable, Otter.ai), desktop apps, and Chrome extensions, not just mobile apps.
-2. If strong web/SaaS tools already exist for a niche (even if App Store is thin), competitionLevel should reflect that reality.
-3. A niche with strong App Store competition AND strong web tools = SATURATED.
-4. A niche where App Store is thin but Notion/Airtable/etc cover it = MODERATE competition at minimum.
-5. Scores must match what a full B2C deep-dive would return — be honest and conservative.
-6. Return EXACTLY 10 opportunities, one per candidate, even if some score low.
-
-Respond JSON only, no markdown:
+Return JSON only, no markdown fences:
 
 {
   "opportunities": [
     {
-      "niche": "<exact candidate niche>",
+      "niche": "<3-6 word specific niche — NOT generic>",
       "opportunityScore": <0-100>,
       "type": "<improve|whitespace>",
       "demandStrength": "<HIGH|MEDIUM|LOW>",
       "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
-      "knownTools": "<2-3 key existing tools including web/SaaS/desktop, or 'None identified'>",
-      "verdict": "<one honest sentence — is this a real gap or already covered?>",
-      "signalQuote": "<most compelling signal from Reddit data, or 'No direct signal found'>",
-      "buildAngle": "<one specific sentence on what would actually win here, or 'Opportunity too thin to recommend'>"
+      "knownTools": "<2-4 existing tools covering this space — mobile apps, web tools, SaaS, AI tools — or 'None identified'>",
+      "verdict": "<one honest punchy sentence about whether this is a real opportunity>",
+      "signalQuote": "<a realistic quote or paraphrase of what frustrated users actually say about this — make it feel authentic>",
+      "buildAngle": "<one specific sentence: what to build and what differentiates it — or 'Gap too thin to recommend'>"
     }
   ]
 }
+
+Return exactly 10 opportunities. Order by opportunityScore descending. Be specific: "sleep quality tracking for night shift nurses" beats "sleep tracking".`;
+
+  return streamClaude(prompt, onChunk);
+}
+
 
 Order by opportunityScore descending.`;
 
@@ -972,13 +870,9 @@ function DiscoveryPanel({ onDiveDeep }) {
     setSelectedDomain(domain);
     setResult(null); setStreamText(""); setPage(0);
     try {
-      setPhase("fetching");
-      const { posts, appReviews } = await runDiscoverySweep(domain, label => setPhaseLabel(label));
       setPhase("synthesizing");
-      setPhaseLabel(posts.length > 0
-        ? `Found ${posts.length} signals — validating 10 candidates…`
-        : `Reddit limited — running from domain knowledge…`);
-      const analysis = await synthesizeDiscovery(domain, posts, appReviews, p => setStreamText(p));
+      setPhaseLabel(`Scanning ${domain.label} for opportunities…`);
+      const analysis = await synthesizeDiscovery(domain, p => setStreamText(p));
       if (analysis) {
         setResult(analysis);
         setHistory(h => [{ domain, result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
@@ -998,7 +892,7 @@ function DiscoveryPanel({ onDiveDeep }) {
     setPhase("done"); setPage(0);
   };
 
-  const busy = phase === "fetching" || phase === "synthesizing";
+  const busy = phase === "synthesizing";
   const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
   const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
   const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
@@ -1012,7 +906,7 @@ function DiscoveryPanel({ onDiveDeep }) {
       {/* Context note */}
       <div style={{ marginBottom: 24, padding: "14px 18px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}22`, borderRadius: 8 }}>
         <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.7, letterSpacing: "0.05em" }}>
-          Pick a domain to scan. Discovery validates each candidate against real App Store and demand signal data before scoring — results should match what a B2C deep-dive finds.
+          Pick a domain. Discovery scans the landscape using AI knowledge of the app, SaaS, and web tool ecosystem — surfacing 10 ranked opportunities with known competition, honest scoring, and a build angle. No rate limits, no external API calls.
         </p>
       </div>
 
@@ -1032,7 +926,7 @@ function DiscoveryPanel({ onDiveDeep }) {
             onMouseLeave={e => { if (!(selectedDomain?.id === domain.id && phase === "done")) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
             <div style={{ fontSize: 20, marginBottom: 8 }}>{domain.emoji}</div>
             <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id && phase === "done" ? accentDisc : C.textDim, marginBottom: 4 }}>{domain.label}</div>
-            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted }}>{domain.subs.slice(0,3).map(s => `r/${s}`).join(" · ")}</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, lineHeight: 1.5 }}>{domain.context.split(",").slice(0,3).join(" ·")}</div>
           </button>
         ))}
       </div>
