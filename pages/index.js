@@ -494,6 +494,11 @@ function B2CPanel({ prefill, onPrefillConsumed }) {
     } catch (e) { console.error(e); setPhase("error"); }
   };
 
+  const clear = () => {
+    setQuery(""); setCompetitors([]); setSubreddits([]); setUseCustomOnly(false);
+    setPhase("idle"); setResult(null); setStreamText(""); setAppData(null); setDemandCount(0);
+  };
+
   return (
     <div>
       {/* Query */}
@@ -501,6 +506,13 @@ function B2CPanel({ prefill, onPrefillConsumed }) {
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && run()}
           placeholder="e.g. meditation, sleep tracking, freelance invoicing…"
           style={{ flex: 1, background: C.surface, border: "none", outline: "none", color: C.text, fontSize: 15, padding: "16px 20px", fontFamily: "'DM Sans', sans-serif" }}/>
+        {(phase === "done" || phase === "error") && (
+          <button onClick={clear} style={{ background: "none", color: C.muted, border: "none", borderLeft: `1px solid ${C.border}`, cursor: "pointer", padding: "16px 16px", fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", transition: "color .2s", whiteSpace: "nowrap" }}
+            onMouseEnter={e => e.currentTarget.style.color = C.red}
+            onMouseLeave={e => e.currentTarget.style.color = C.muted}>
+            ✕ Clear
+          </button>
+        )}
         <button onClick={run} disabled={!query.trim() || busy} style={{ background: query.trim() ? C.accent : C.muted, color: C.bg, border: "none", cursor: query.trim() && !busy ? "pointer" : "default", padding: "16px 28px", fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", transition: "background .2s", whiteSpace: "nowrap" }}>
           {busy ? <Pulse /> : "Analyze"}
         </button>
@@ -608,6 +620,11 @@ function B2BPanel() {
     } catch (e) { console.error(e); setPhase("error"); }
   };
 
+  const clear = () => {
+    setQuery(""); setCompetitors([]); setSubreddits([]); setUseCustomOnly(false);
+    setPhase("idle"); setResult(null); setStreamText("");
+  };
+
   return (
     <div>
       {/* Query */}
@@ -615,6 +632,13 @@ function B2BPanel() {
         <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && run()}
           placeholder="e.g. HR onboarding, project management, sales ops, devops monitoring…"
           style={{ flex: 1, background: C.surface, border: "none", outline: "none", color: C.text, fontSize: 15, padding: "16px 20px", fontFamily: "'DM Sans', sans-serif" }}/>
+        {(phase === "done" || phase === "error") && (
+          <button onClick={clear} style={{ background: "none", color: C.muted, border: "none", borderLeft: `1px solid ${C.border}`, cursor: "pointer", padding: "16px 16px", fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", transition: "color .2s", whiteSpace: "nowrap" }}
+            onMouseEnter={e => e.currentTarget.style.color = C.red}
+            onMouseLeave={e => e.currentTarget.style.color = C.muted}>
+            ✕ Clear
+          </button>
+        )}
         <button onClick={run} disabled={!query.trim() || busy} style={{ background: query.trim() ? C.accentB2B : C.muted, color: query.trim() ? C.bg : C.textDim, border: "none", cursor: query.trim() && !busy ? "pointer" : "default", padding: "16px 28px", fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", transition: "background .2s", whiteSpace: "nowrap" }}>
           {busy ? <Pulse color={C.accentB2B} /> : "Analyze"}
         </button>
@@ -777,39 +801,86 @@ async function synthesizeDiscovery(domain, posts, appReviews, onChunk) {
     `[${r.app}] ★${r.rating} "${r.title}": ${r.content?.slice(0, 150)}`
   ).join("\n");
 
-  const prompt = `You are a sharp product opportunity researcher scanning the "${domain.label}" space for unmet needs.
+  // Stage 1: identify candidate niches from the broad sweep
+  const candidatePrompt = `You are a product opportunity researcher. From these signals in the "${domain.label}" space, identify the 5 most specific candidate niches worth investigating.
 
-REDDIT SIGNALS from ${domain.label} communities:
-${redditSummary || "No signals found."}
+REDDIT SIGNALS:
+${redditSummary || "None."}
 
-APP STORE LOW-RATED REVIEWS (${domain.label} apps):
-${reviewSummary || "No reviews found."}
+APP STORE LOW-RATED REVIEWS:
+${reviewSummary || "None."}
 
-Identify the 5-7 most compelling unmet needs or opportunity areas — things people are clearly asking for, complaining about, or working around that don't have a good solution yet.
+Return JSON only, no markdown:
+{ "candidates": ["<specific niche 1>", "<specific niche 2>", "<specific niche 3>", "<specific niche 4>", "<specific niche 5>"] }
 
-For each opportunity, assess:
-- Is this an improvement opportunity (existing bad solutions) or whitespace (nothing exists)?
-- How strong is the demand signal?
-- How competitive is the space?
+Be specific: "sleep tracking for shift workers" beats "sleep tracking".`;
+
+  let candidates = [];
+  try {
+    const candidateRes = await fetch("/api/claude", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 300, messages: [{ role: "user", content: candidatePrompt }] }),
+    });
+    const candidateData = await candidateRes.json();
+    const candidateText = (candidateData.content || []).map(b => b.text || "").join("").replace(/```json|```/g, "").trim();
+    candidates = JSON.parse(candidateText).candidates || [];
+  } catch { candidates = domain.queries; } // fallback to domain queries
+
+  onChunk("Validating " + candidates.length + " candidate niches…");
+
+  // Stage 2: mini deep-dive on each candidate -- Reddit demand + App Store check
+  const validations = [];
+  for (const niche of candidates.slice(0, 5)) {
+    try {
+      const [demandData, appData] = await Promise.all([
+        redditFetch(`https://www.reddit.com/search.json?q=${encodeURIComponent('"is there an app" ' + niche)}&sort=relevance&limit=8&t=all`),
+        fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(niche)}&entity=software&limit=2&country=us`).then(r => r.json()),
+      ]);
+      const demandPosts = (demandData?.data?.children || []).map(p => ({ title: p.data.title, score: p.data.score }));
+      const apps = appData?.results || [];
+      validations.push({ niche, demandPosts, topApp: apps[0] ? `${apps[0].trackName} ★${apps[0].averageUserRating?.toFixed(1)} (${apps[0].userRatingCount?.toLocaleString()} reviews)` : "No App Store match found" });
+    } catch {
+      validations.push({ niche, demandPosts: [], topApp: "Could not check" });
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+
+  const validationSummary = validations.map(v =>
+    `NICHE: "${v.niche}"\n  App Store: ${v.topApp}\n  Demand signals: ${v.demandPosts.length > 0 ? v.demandPosts.slice(0,3).map(p => `"${p.title}" ↑${p.score}`).join(" | ") : "none found"}`
+  ).join("\n\n");
+
+  // Stage 3: score with full context
+  const prompt = `You are a sharp product strategist. Score these validated opportunity candidates in the "${domain.label}" space.
+
+BROAD SWEEP SIGNALS (community context):
+${redditSummary.slice(0, 1500) || "None."}
+
+VALIDATED CANDIDATES (App Store check + demand signals per niche):
+${validationSummary}
+
+For each candidate, use BOTH the broad context AND the validation data to score accurately.
+If App Store competition is strong AND demand signals are weak → score LOW.
+If App Store is weak/absent AND demand signals exist → score HIGH.
+These scores must be consistent with what a B2C deep-dive would find.
 
 Respond JSON only, no markdown:
 
 {
   "opportunities": [
     {
-      "niche": "<3-5 word niche name, specific not generic>",
-      "opportunityScore": <0-100>,
+      "niche": "<exact candidate niche name>",
+      "opportunityScore": <0-100, must reflect actual App Store competition and demand signal strength>,
       "type": "<improve|whitespace>",
       "demandStrength": "<HIGH|MEDIUM|LOW>",
       "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
-      "verdict": "<one punchy sentence — what the opportunity is>",
-      "signalQuote": "<most compelling verbatim quote or post title from the data>",
-      "buildAngle": "<one specific sentence on what to build or how to differentiate>"
+      "verdict": "<one punchy honest sentence>",
+      "signalQuote": "<most compelling verbatim signal from the data>",
+      "buildAngle": "<one specific sentence on what to build>"
     }
   ]
 }
 
-Order by opportunityScore descending. Be specific — "sleep quality during pregnancy" beats "sleep tracking".`;
+Order by opportunityScore descending.`;
 
   return streamClaude(prompt, onChunk);
 }
@@ -874,7 +945,7 @@ function DiscoveryPanel({ onDiveDeep }) {
       setPhase("fetching");
       const { posts, appReviews } = await runDiscoverySweep(domain, label => setPhaseLabel(label));
       setPhase("synthesizing");
-      setPhaseLabel(`Identifying opportunities in ${domain.label}…`);
+      setPhaseLabel(`Identifying + validating candidates in ${domain.label}…`);
       const analysis = await synthesizeDiscovery(domain, posts, appReviews, p => setStreamText(p));
       if (analysis) { setResult(analysis); setPhase("done"); }
       else setPhase("error");
