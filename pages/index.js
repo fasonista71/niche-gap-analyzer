@@ -39,6 +39,263 @@ function Pulse() {
   );
 }
 
+// ── Export utilities ───────────────────────────────────────────────────────
+function exportMarkdown(query, competitors, result) {
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const compLine = competitors?.length > 0 ? `**Competitors analyzed:** ${competitors.join(", ")}\n` : "";
+  const matrix = result.competitorMatrix?.length > 0 ? `
+## Competitor Matrix
+
+| App | Rating | Top Complaint | Missing Feature | Price | Vulnerability |
+|-----|--------|---------------|-----------------|-------|---------------|
+${result.competitorMatrix.map(c => `| ${c.name} | ★${c.rating?.toFixed(1)} | ${c.topComplaint} | ${c.missingFeature} | ${c.pricePoint} | ${c.weaknessScore}/100 |`).join("\n")}
+
+**Shared Whitespace:** ${result.sharedWeakness || "N/A"}
+` : "";
+
+  const demandQuotes = result.demandQuotes?.length > 0 ? `
+## Raw Demand Expressions
+
+${result.demandQuotes.map(q => `> "${q.quote}" *(${q.type}${q.upvotes > 0 ? ` · ↑${q.upvotes}` : ""})*`).join("\n\n")}
+` : "";
+
+  const md = `# Niche Gap Analysis: ${query}
+*Generated ${date} · niche-gap.vercel.app*
+
+${compLine}
+---
+
+## Opportunity Score: ${result.opportunityScore}/100
+
+**Verdict:** ${result.verdict}
+
+| | |
+|---|---|
+| Demand Strength | ${result.demandStrength} |
+| Competition Level | ${result.competitionLevel} |
+
+---
+
+## Top Pain Themes
+
+${result.topPainThemes?.map(t => `### ${t.theme} (${t.frequency})\n${t.exactPhrases?.map(p => `- "${p}"`).join("\n") || ""}`).join("\n\n")}
+
+---
+
+## Missing Features
+
+${result.missingFeatures?.map(f => `- ${f}`).join("\n")}
+${matrix}${demandQuotes}
+---
+
+## Positioning Angle
+
+> "${result.positioningAngle}"
+
+**Target Audience:** ${result.targetAudience}
+
+---
+
+## Build Recommendation
+
+${result.buildRecommendation}
+
+---
+
+## Reddit Signal
+
+> "${result.redditInsight}"
+
+---
+
+## Risks & Caveats
+
+${result.warnings?.map(w => `- ⚠ ${w}`).join("\n")}
+
+---
+*Sources: Reddit API · App Store RSS · Claude Synthesis*
+`;
+
+  const blob = new Blob([md], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `niche-gap-${query.replace(/\s+/g, "-").toLowerCase()}-${Date.now()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportHTML(query, competitors, result, appData) {
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const scoreColor = result.opportunityScore >= 70 ? "#47ffb2" : result.opportunityScore >= 45 ? "#ffab47" : "#ff4d4d";
+  const demandColor = result.demandStrength === "HIGH" ? "#47ffb2" : result.demandStrength === "MEDIUM" ? "#ffab47" : "#ff4d4d";
+  const compColor = result.competitionLevel === "ABSENT" || result.competitionLevel === "THIN" ? "#47ffb2" : result.competitionLevel === "MODERATE" ? "#ffab47" : "#ff4d4d";
+
+  const matrixHTML = result.competitorMatrix?.length > 0 ? `
+    <section>
+      <h2>Competitor Matrix</h2>
+      <table>
+        <thead><tr><th>App</th><th>Rating</th><th>Top Complaint</th><th>Missing Feature</th><th>Price</th><th>Vulnerability</th></tr></thead>
+        <tbody>
+          ${result.competitorMatrix.map(c => {
+            const vc = c.weaknessScore >= 70 ? "#47ffb2" : c.weaknessScore >= 45 ? "#ffab47" : "#ff4d4d";
+            return `<tr><td><strong>${c.name}</strong></td><td style="color:${c.rating>=4?"#47ffb2":c.rating>=3?"#ffab47":"#ff4d4d"}">★${c.rating?.toFixed(1)}</td><td>${c.topComplaint}</td><td>${c.missingFeature}</td><td>${c.pricePoint}</td><td style="color:${vc}">${c.weaknessScore}/100</td></tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+      ${result.sharedWeakness ? `<div class="callout orange"><span class="label">Shared Whitespace</span><p class="serif italic">"${result.sharedWeakness}"</p></div>` : ""}
+    </section>` : "";
+
+  const demandHTML = result.demandQuotes?.length > 0 ? `
+    <section>
+      <h2>Raw Demand Expressions</h2>
+      <div class="quote-grid">
+        ${result.demandQuotes.map(q => `
+          <div class="quote-card ${q.type}">
+            <div class="quote-meta">${q.type === "seeking" ? "↗ seeking" : "↘ lamenting"}${q.upvotes > 0 ? ` · ↑${q.upvotes}` : ""}</div>
+            <p class="serif italic">"${q.quote}"</p>
+          </div>`).join("")}
+      </div>
+    </section>` : "";
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Niche Gap Report: ${query}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0a0b;color:#e2e2e8;font-family:'DM Sans',sans-serif;max-width:860px;margin:0 auto;padding:48px 32px 80px}
+  h1{font-family:'Instrument Serif',serif;font-size:40px;font-weight:400;line-height:1.1;margin-bottom:8px}
+  h1 em{color:#e8ff47;font-style:italic}
+  h2{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:#8888a0;margin-bottom:16px;margin-top:0}
+  section{background:#111114;border:1px solid #1e1e24;border-radius:8px;padding:24px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:#4a4a5a;text-align:left;padding:0 12px 10px 0}
+  td{padding:10px 12px 10px 0;color:#8888a0;border-top:1px solid #1e1e24;vertical-align:top}
+  td:first-child{color:#e2e2e8}
+  .mono{font-family:'DM Mono',monospace}
+  .serif{font-family:'Instrument Serif',serif}
+  .italic{font-style:italic}
+  .meta{font-family:'DM Mono',monospace;font-size:11px;color:#4a4a5a;margin-bottom:32px}
+  .score-row{display:flex;align-items:center;gap:24px;margin-bottom:0}
+  .score-num{font-family:'DM Mono',monospace;font-size:52px;font-weight:700;color:${scoreColor};line-height:1}
+  .verdict{font-family:'Instrument Serif',serif;font-size:22px;line-height:1.4;flex:1}
+  .tags{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+  .tag{display:inline-block;font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:#0a0a0b;padding:2px 8px;border-radius:2px;font-weight:700}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  .theme{margin-bottom:14px}
+  .theme-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .theme-name{font-size:13px;font-weight:600}
+  .phrases{display:flex;flex-wrap:wrap;gap:4px}
+  .phrase{font-family:'DM Mono',monospace;font-size:11px;color:#8888a0;background:#1e1e24;padding:2px 7px;border-radius:2px}
+  .feature{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start;font-size:13px;line-height:1.5}
+  .arrow{color:#e8ff47;font-size:14px;flex-shrink:0}
+  .callout{padding:14px 18px;border-radius:6px;margin-top:16px}
+  .callout.accent{background:rgba(232,255,71,0.05);border:1px solid rgba(232,255,71,0.2)}
+  .callout.orange{background:rgba(255,171,71,0.07);border:1px solid rgba(255,171,71,0.2)}
+  .label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;display:block;margin-bottom:6px}
+  .callout.accent .label{color:#e8ff47}
+  .callout.orange .label{color:#ffab47}
+  .callout p{font-size:15px;line-height:1.5}
+  .quote-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .quote-card{padding:12px 14px;background:#0a0a0b;border-radius:6px}
+  .quote-card.seeking{border:1px solid rgba(232,255,71,0.2)}
+  .quote-card.lamenting{border:1px solid rgba(255,171,71,0.2)}
+  .quote-meta{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px}
+  .quote-card.seeking .quote-meta{color:#e8ff47}
+  .quote-card.lamenting .quote-meta{color:#ffab47}
+  .quote-card p{font-size:14px;line-height:1.5;color:#e2e2e8}
+  .risk{display:flex;gap:10px;margin-bottom:8px;font-size:13px;color:#8888a0;line-height:1.6}
+  .warning-icon{color:#ff4d4d;flex-shrink:0}
+  .divider{border:none;border-top:1px solid #1e1e24;margin:32px 0}
+  .footer{font-family:'DM Mono',monospace;font-size:10px;color:#4a4a5a;display:flex;justify-content:space-between}
+  @media print{body{padding:24px}button{display:none!important}}
+</style>
+</head>
+<body>
+  <div style="margin-bottom:40px">
+    <div style="font-family:'DM Mono',monospace;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#e8ff47;margin-bottom:14px">Niche Gap Analyzer</div>
+    <h1>Gap Report:<br/><em>${query}</em></h1>
+    <p class="meta">${date}${competitors?.length > 0 ? ` · Competitors: ${competitors.join(", ")}` : ""}</p>
+    <button onclick="window.print()" style="background:#e8ff47;color:#0a0a0b;border:none;cursor:pointer;padding:10px 20px;font-family:'DM Mono',monospace;font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;border-radius:4px">Save as PDF</button>
+  </div>
+
+  <section>
+    <div class="score-row">
+      <div class="score-num">${result.opportunityScore}</div>
+      <div>
+        <div class="tags">
+          <span class="tag" style="background:${demandColor}">Demand: ${result.demandStrength}</span>
+          <span class="tag" style="background:${compColor}">Competition: ${result.competitionLevel}</span>
+          ${appData ? `<span class="tag" style="background:#4a4a5a">${appData.name}</span>` : ""}
+        </div>
+        <p class="verdict">${result.verdict}</p>
+      </div>
+    </div>
+  </section>
+
+  ${matrixHTML}
+
+  <div class="grid-2">
+    <section>
+      <h2>Top Pain Themes</h2>
+      ${result.topPainThemes?.map(t => {
+        const tc = t.frequency === "HIGH" ? "#ff4d4d" : t.frequency === "MED" ? "#ffab47" : "#4a4a5a";
+        return `<div class="theme">
+          <div class="theme-head"><span class="theme-name">${t.theme}</span><span class="tag" style="background:${tc}">${t.frequency}</span></div>
+          <div class="phrases">${t.exactPhrases?.map(p => `<span class="phrase">"${p}"</span>`).join("") || ""}</div>
+        </div>`;
+      }).join("") || ""}
+    </section>
+    <section>
+      <h2>Missing Features</h2>
+      ${result.missingFeatures?.map(f => `<div class="feature"><span class="arrow">→</span><span>${f}</span></div>`).join("") || ""}
+      <hr style="border:none;border-top:1px solid #1e1e24;margin:20px 0 16px"/>
+      <h2>Target Audience</h2>
+      <p style="font-size:13px;color:#8888a0;line-height:1.6">${result.targetAudience}</p>
+    </section>
+  </div>
+
+  ${demandHTML}
+
+  <div class="grid-2">
+    <section>
+      <h2>Positioning Angle</h2>
+      <div class="callout accent"><p class="serif italic">"${result.positioningAngle}"</p></div>
+    </section>
+    <section>
+      <h2>Build Recommendation</h2>
+      <p style="font-size:13px;line-height:1.6">${result.buildRecommendation}</p>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section>
+      <h2>Reddit Signal</h2>
+      <p style="font-size:13px;color:#8888a0;line-height:1.7;font-style:italic">"${result.redditInsight}"</p>
+    </section>
+    <section style="border-color:rgba(255,77,77,0.2)">
+      <h2 style="color:#ff4d4d">Risks & Caveats</h2>
+      ${result.warnings?.map(w => `<div class="risk"><span class="warning-icon">⚠</span><span>${w}</span></div>`).join("") || ""}
+    </section>
+  </div>
+
+  <hr class="divider"/>
+  <div class="footer">
+    <span>SOURCES: Reddit API · App Store RSS · Claude Synthesis</span>
+    <span>niche-gap.vercel.app</span>
+  </div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+}
+
 async function redditFetch(url) {
   const res = await fetch(`/api/reddit?url=${encodeURIComponent(url)}`);
   return res.json();
@@ -322,6 +579,22 @@ export default function Home() {
           {/* Results */}
           {phase === "done" && result && (
             <div style={{ marginTop: 40, animation: "fadeUp .5s ease both" }}>
+
+              {/* Export buttons */}
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginBottom: 16 }}>
+                <button onClick={() => exportMarkdown(query, competitors, result)}
+                  style={{ background: "none", border: `1px solid ${C.borderLit}`, color: C.textDim, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 7, transition: "border-color .2s, color .2s" }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.borderLit; e.currentTarget.style.color = C.textDim; }}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  Markdown
+                </button>
+                <button onClick={() => exportHTML(query, competitors, result, appData)}
+                  style={{ background: C.accent, border: `1px solid ${C.accent}`, color: C.bg, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 7 }}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  Export Report
+                </button>
+              </div>
 
               {/* Score + verdict */}
               <div style={{ display: "flex", gap: 20, alignItems: "flex-start", padding: "24px 28px", background: C.surface, border: `1px solid ${C.borderLit}`, borderRadius: 8, marginBottom: 20 }}>
