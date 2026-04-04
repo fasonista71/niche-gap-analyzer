@@ -277,7 +277,7 @@ async function streamClaude(prompt, onChunk) {
 }
 
 // ── Shared results renderer ────────────────────────────────────────────────
-function Results({ result, appData, query, competitors, mode }) {
+function Results({ result, appData, query, competitors, mode, onSave }) {
   const accent = mode === "b2b" ? C.accentB2B : C.accent;
   const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
   const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
@@ -285,8 +285,23 @@ function Results({ result, appData, query, competitors, mode }) {
   return (
     <div style={{ marginTop: 40, animation: "fadeUp .5s ease both" }}>
 
-      {/* Export buttons */}
+      {/* Export + Save buttons */}
       <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginBottom: 16 }}>
+        <button onClick={() => onSave && onSave({
+          niche: query,
+          opportunityScore: result.opportunityScore,
+          type: result.competitionLevel === "ABSENT" || result.competitionLevel === "THIN" ? "whitespace" : "improve",
+          demandStrength: result.demandStrength,
+          competitionLevel: result.competitionLevel,
+          verdict: result.verdict,
+          knownTools: result.competitorMatrix?.map(c => c.name).join(", ") || "None identified",
+          buildAngle: result.buildRecommendation,
+        }, mode === "b2b" ? "B2B" : "B2C")}
+          style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 6, transition: "border-color .2s, color .2s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = "#ffd166"; e.currentTarget.style.color = "#ffd166"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+          🔖 Save
+        </button>
         <button onClick={() => exportMarkdown(query, competitors, result, mode)}
           style={{ background: "none", border: `1px solid ${C.borderLit}`, color: C.textDim, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 7, transition: "border-color .2s,color .2s" }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = accent; e.currentTarget.style.color = accent; }}
@@ -483,7 +498,7 @@ function Results({ result, appData, query, competitors, mode }) {
 }
 
 // ── B2C Panel ──────────────────────────────────────────────────────────────
-function B2CPanel({ prefill, onPrefillConsumed }) {
+function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
   const [query, setQuery] = useState("");
   const runRef = useRef(null);
 
@@ -603,7 +618,7 @@ function B2CPanel({ prefill, onPrefillConsumed }) {
       {phase === "error" && (
         <div style={{ marginTop: 24, padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Analysis failed. Check your connection and try again.</div>
       )}
-      {phase === "done" && result && <Results result={result} appData={appData} query={query} competitors={competitors} mode="b2c" />}
+      {phase === "done" && result && <Results result={result} appData={appData} query={query} competitors={competitors} mode="b2c" onSave={onSave} />}
 
       {/* History */}
       {history.length > 1 && (
@@ -625,7 +640,7 @@ function B2CPanel({ prefill, onPrefillConsumed }) {
 }
 
 // ── B2B Panel ──────────────────────────────────────────────────────────────
-function B2BPanel() {
+function B2BPanel({ onSave }) {
   const [query, setQuery] = useState("");
   const [competitors, setCompetitors] = useState([]);
   const [subreddits, setSubreddits] = useState([]);
@@ -736,7 +751,7 @@ function B2BPanel() {
       {phase === "error" && (
         <div style={{ marginTop: 24, padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Analysis failed. Check your connection and try again.</div>
       )}
-      {phase === "done" && result && <Results result={result} appData={null} query={query} competitors={competitors} mode="b2b" />}
+      {phase === "done" && result && <Results result={result} appData={null} query={query} competitors={competitors} mode="b2b" onSave={onSave} />}
 
       {/* History */}
       {history.length > 1 && (
@@ -869,11 +884,12 @@ Return exactly 10 opportunities ordered by opportunityScore descending.`;
 
 
 // ── Opportunity row -- must be a real component to use useState ────────────
-function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor, demandColor, compColor }) {
+function OpportunityRow({ opp, index, total, onDiveDeep, onSave, accentDisc, scoreColor, demandColor, compColor }) {
   const [sent, setSent] = useState(false);
+  const [savedLocal, setSavedLocal] = useState(false);
   return (
     <div style={{
-      display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px",
+      display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 160px",
       gap: 0, padding: "16px 20px",
       borderBottom: index < total - 1 ? `1px solid ${C.border}` : "none",
     }}>
@@ -902,7 +918,7 @@ function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor,
       <div style={{ paddingTop: 2 }}>
         <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>{opp.competitionLevel}</span>
       </div>
-      <div style={{ display: "flex", alignItems: "flex-start", paddingTop: 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, paddingTop: 1 }}>
         {sent ? (
           <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.green, letterSpacing: "0.1em" }}>✓ Pre-filled B2C</span>
         ) : (
@@ -911,6 +927,16 @@ function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor,
             onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}30`}
             onMouseLeave={e => e.currentTarget.style.background = `${accentDisc}15`}>
             Dive Deep →
+          </button>
+        )}
+        {savedLocal ? (
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: "#ffd166" }}>🔖 Saved</span>
+        ) : (
+          <button onClick={() => { onSave(opp, "Discovery"); setSavedLocal(true); }}
+            style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "4px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", whiteSpace: "nowrap", transition: "border-color .2s, color .2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#ffd166"; e.currentTarget.style.color = "#ffd166"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
+            🔖 Save
           </button>
         )}
       </div>
@@ -1085,7 +1111,7 @@ function DiscoveryPanel({ onDiveDeep }) {
             </div>
             {pageOpps.map((opp, i) => (
               <OpportunityRow key={`${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
-                onDiveDeep={onDiveDeep} accentDisc={accentDisc}
+                onDiveDeep={onDiveDeep} onSave={onSave} accentDisc={accentDisc}
                 scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
             ))}
           </div>
@@ -1136,15 +1162,167 @@ function DiscoveryPanel({ onDiveDeep }) {
 }
 
 
+// ── Saved opportunities scratchpad ─────────────────────────────────────────
+function exportSavedMarkdown(saved) {
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const lines = [`# Saved Opportunities\n*Exported ${date} · niche-gap.vercel.app*\n\n---\n`];
+  saved.forEach((item, i) => {
+    const o = item.opp;
+    lines.push(`## ${i + 1}. ${o.niche} · Score: ${o.opportunityScore}`);
+    lines.push(`**Source:** ${item.source} · **Saved:** ${new Date(item.savedAt).toLocaleString()}`);
+    lines.push(`**Verdict:** ${o.verdict}`);
+    if (o.demandStrength) lines.push(`**Demand:** ${o.demandStrength} · **Competition:** ${o.competitionLevel}`);
+    if (o.knownTools && o.knownTools !== "None identified") lines.push(`**Known tools:** ${o.knownTools}`);
+    if (o.trendDriver) lines.push(`**Trend driver:** ${o.trendDriver}`);
+    if (o.buildAngle) lines.push(`**Build angle:** ${o.buildAngle}`);
+    if (item.note) lines.push(`**My note:** ${item.note}`);
+    lines.push("\n---\n");
+  });
+  const md = lines.join("\n");
+  const blob = new Blob([md], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `saved-opportunities-${Date.now()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function SavedPanel({ saved, onRemove, onNoteChange }) {
+  const accentSaved = "#ffd166"; // warm gold
+  const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
+
+  if (saved.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "60px 24px" }}>
+        <div style={{ fontSize: 32, marginBottom: 16 }}>🔖</div>
+        <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 20, color: C.textDim, marginBottom: 8 }}>No saved opportunities yet</p>
+        <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, lineHeight: 1.7 }}>
+          Hit the bookmark icon on any Discovery row or B2C/B2B result to save it here for later.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <h2 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentSaved, marginBottom: 4 }}>
+            {saved.length} Saved Opportunit{saved.length === 1 ? "y" : "ies"}
+          </h2>
+          <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
+            Add notes, then export to markdown to keep permanently.
+          </p>
+        </div>
+        <button onClick={() => exportSavedMarkdown(saved)}
+          style={{ background: accentSaved, color: C.bg, border: "none", cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 6 }}>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          Export .md
+        </button>
+      </div>
+
+      {/* Saved items */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {saved.map((item, i) => {
+          const o = item.opp;
+          return (
+            <div key={item.id} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "20px 22px", position: "relative" }}>
+              {/* Remove button */}
+              <button onClick={() => onRemove(item.id)}
+                style={{ position: "absolute", top: 14, right: 14, background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 4, transition: "color .2s" }}
+                onMouseEnter={e => e.currentTarget.style.color = C.red}
+                onMouseLeave={e => e.currentTarget.style.color = C.muted}>
+                ×
+              </button>
+
+              {/* Top row */}
+              <div style={{ display: "flex", gap: 16, alignItems: "flex-start", marginBottom: 12 }}>
+                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 22, fontWeight: 700, color: scoreColor(o.opportunityScore), lineHeight: 1, flexShrink: 0 }}>
+                  {o.opportunityScore}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{o.niche}</span>
+                    {o.type && (
+                      <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 6px", borderRadius: 2, background: o.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: o.type === "whitespace" ? C.green : C.orange, fontWeight: 700 }}>{o.type}</span>
+                    )}
+                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted }}>{item.source}</span>
+                  </div>
+                  <p style={{ fontSize: 13, color: C.textDim, lineHeight: 1.5 }}>{o.verdict}</p>
+                </div>
+              </div>
+
+              {/* Meta row */}
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+                {o.demandStrength && (
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>
+                    <span style={{ color: C.muted }}>Demand </span>
+                    <span style={{ color: o.demandStrength === "HIGH" ? C.green : o.demandStrength === "MEDIUM" ? C.orange : C.red, fontWeight: 700 }}>{o.demandStrength}</span>
+                  </div>
+                )}
+                {o.competitionLevel && (
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>
+                    <span style={{ color: C.muted }}>Competition </span>
+                    <span style={{ color: o.competitionLevel === "ABSENT" || o.competitionLevel === "THIN" ? C.green : o.competitionLevel === "MODERATE" ? C.orange : C.red, fontWeight: 700 }}>{o.competitionLevel}</span>
+                  </div>
+                )}
+                {o.knownTools && o.knownTools !== "None identified" && (
+                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>
+                    <span style={{ color: C.muted }}>Tools </span>
+                    <span style={{ color: C.orange }}>{o.knownTools}</span>
+                  </div>
+                )}
+              </div>
+
+              {o.buildAngle && o.buildAngle !== "Gap too thin to recommend" && (
+                <div style={{ marginBottom: 12, padding: "8px 12px", background: `${accentSaved}0d`, border: `1px solid ${accentSaved}22`, borderRadius: 5 }}>
+                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: accentSaved, display: "block", marginBottom: 3 }}>Build angle</span>
+                  <p style={{ fontSize: 12, color: C.text, lineHeight: 1.5 }}>{o.buildAngle}</p>
+                </div>
+              )}
+
+              {/* Note input */}
+              <textarea
+                placeholder="Add a personal note… (why it resonated, next steps, ideas)"
+                value={item.note || ""}
+                onChange={e => onNoteChange(item.id, e.target.value)}
+                style={{
+                  width: "100%", background: C.bg, border: `1px solid ${C.border}`,
+                  borderRadius: 5, color: C.text, fontSize: 12, fontFamily: "'DM Sans', sans-serif",
+                  padding: "10px 12px", resize: "vertical", minHeight: 60, outline: "none",
+                  lineHeight: 1.6, transition: "border-color .2s",
+                }}
+                onFocus={e => e.target.style.borderColor = accentSaved}
+                onBlur={e => e.target.style.borderColor = C.border}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Home() {
   const [activeTab, setActiveTab] = useState("b2c");
   const [b2cPrefill, setB2cPrefill] = useState(null);
+  const [saved, setSaved] = useState([]); // [{ id, opp, source, savedAt, note }]
 
-  const handleDiveDeep = (niche) => {
-    setB2cPrefill(niche);
-    // Don't switch tabs — let user navigate manually so Discovery results stay intact
+  const handleDiveDeep = (niche) => { setB2cPrefill(niche); };
+
+  const handleSave = (opp, source) => {
+    setSaved(s => {
+      if (s.find(x => x.opp.niche === opp.niche)) return s; // no dupes
+      return [{ id: Date.now(), opp, source, savedAt: Date.now(), note: "" }, ...s];
+    });
   };
+
+  const handleRemove = (id) => setSaved(s => s.filter(x => x.id !== id));
+  const handleNoteChange = (id, note) => setSaved(s => s.map(x => x.id === id ? { ...x, note } : x));
+  const savedCount = saved.length;
 
   return (
     <>
@@ -1165,7 +1343,7 @@ export default function Home() {
 
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }}/>
-        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
+        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
 
         <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
 
@@ -1194,14 +1372,20 @@ export default function Home() {
             {[
               { key: "b2c",      label: "B2C — Consumer Apps",  accent: C.accent,     sub: "App Store · consumer Reddit" },
               { key: "b2b",      label: "B2B — SaaS & Tools",   accent: C.accentB2B,  sub: "Professional communities · enterprise" },
-              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Scan a domain · find opportunities" },
+              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Zeitgeist · domain deep-dive" },
+              { key: "saved",    label: "Saved",                 accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
             ].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
                 background: "none", border: "none", cursor: "pointer", padding: "12px 24px 14px",
                 borderBottom: activeTab === tab.key ? `2px solid ${tab.accent}` : "2px solid transparent",
-                marginBottom: -1, transition: "border-color .2s",
+                marginBottom: -1, transition: "border-color .2s", position: "relative",
               }}>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: activeTab === tab.key ? tab.accent : C.muted, transition: "color .2s", marginBottom: 3 }}>{tab.label}</div>
+                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: activeTab === tab.key ? tab.accent : C.muted, transition: "color .2s", marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }}>
+                  {tab.label}
+                  {tab.key === "saved" && savedCount > 0 && (
+                    <span style={{ background: "#ffd166", color: C.bg, borderRadius: 10, fontSize: 9, fontWeight: 700, padding: "1px 6px", lineHeight: 1.4 }}>{savedCount}</span>
+                  )}
+                </div>
                 <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", color: activeTab === tab.key ? C.textDim : C.muted, textTransform: "uppercase" }}>{tab.sub}</div>
               </button>
             ))}
@@ -1209,13 +1393,16 @@ export default function Home() {
 
           {/* Active panel — all kept mounted to preserve state */}
           <div style={{ display: activeTab === "b2c" ? "block" : "none" }}>
-            <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} />
+            <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} onSave={handleSave} />
           </div>
           <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
-            <B2BPanel />
+            <B2BPanel onSave={handleSave} />
           </div>
           <div style={{ display: activeTab === "discover" ? "block" : "none" }}>
-            <DiscoveryPanel onDiveDeep={handleDiveDeep} />
+            <DiscoveryPanel onDiveDeep={handleDiveDeep} onSave={handleSave} />
+          </div>
+          <div style={{ display: activeTab === "saved" ? "block" : "none" }}>
+            <SavedPanel saved={saved} onRemove={handleRemove} onNoteChange={handleNoteChange} />
           </div>
 
           {/* Footer */}
