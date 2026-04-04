@@ -1,109 +1,47 @@
 # Niche Gap Analyzer
 
-Find what people want that nobody's built yet.
-Cross-references Reddit demand signals with App Store competitive gaps.
+**Find what people want that nobody's built yet.**
+
+A market research tool that surfaces validated, underserved opportunities using AI synthesis across consumer communities, App Store signals, and competitive landscape data.
 
 ---
 
-## Deploy to Vercel (first time)
+## What it does
 
-### 1. Install prerequisites
+**Zeitgeist Scan** — a cross-domain sweep that identifies the strongest unmet needs in the market right now, ranked by opportunity score with honest competition assessment.
 
-```bash
-# Install Node.js if you don't have it
-# https://nodejs.org — download the LTS version
+**B2C Analysis** — validate a specific consumer app niche using Reddit pain signals, App Store review mining, and demand expression clustering. Includes a full competitive landscape mapper for side-by-side competitor analysis.
 
-# Install Vercel CLI
-npm install -g vercel
-```
+**B2B Analysis** — validate enterprise and SaaS opportunities using professional community signals, ICP definition, GTM motion recommendations, and buyer psychology insights.
 
-### 2. Get your Anthropic API key
+**Discovery** — domain-specific deep dives across Health, Finance, Productivity, Creator Tools, and more. Each scan returns 10 scored opportunities with known competition, trend drivers, and build angles.
 
-Go to https://console.anthropic.com → API Keys → Create new key
-Copy it — you'll need it in step 4.
-
-### 3. Push to GitHub
-
-```bash
-cd niche-gap
-git init
-git add .
-git commit -m "initial commit"
-```
-
-Create a new repo at github.com (call it `niche-gap-analyzer`), then:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/niche-gap-analyzer.git
-git push -u origin main
-```
-
-### 4. Deploy with Vercel
-
-```bash
-vercel
-```
-
-Follow the prompts:
-- Set up and deploy? → Y
-- Which scope? → your account
-- Link to existing project? → N
-- Project name → niche-gap-analyzer (or whatever you want)
-- Directory → ./ (just hit enter)
-- Override settings? → N
-
-### 5. Add your API key as an environment variable
-
-```bash
-vercel env add ANTHROPIC_API_KEY
-```
-
-Paste your key when prompted. Select: Production, Preview, Development.
-
-Then redeploy to pick it up:
-
-```bash
-vercel --prod
-```
-
-Your app is live at `https://niche-gap-analyzer.vercel.app` (or whatever name Vercel assigned).
+**Saved Shortlist** — bookmark opportunities across any mode, add personal notes, and export to markdown for offline research.
 
 ---
 
-## Local development
+## How scores work
 
-```bash
-npm install
-cp .env.example .env.local
-# Edit .env.local and add your ANTHROPIC_API_KEY
+Opportunities are scored 0–100:
 
-npm run dev
-# Open http://localhost:3000
-```
+- **70+** Real gap with clear demand and weak or absent solutions
+- **45–69** Real demand exists but meaningful competition is present — differentiation is possible
+- **Below 45** Saturated space or demand too diffuse to act on
 
----
-
-## Redeploying after changes
-
-```bash
-git add .
-git commit -m "your change description"
-git push
-# Vercel auto-deploys on push if connected to GitHub
-```
-
-Or manually:
-```bash
-vercel --prod
-```
+Scores account for mobile apps, web tools, SaaS, desktop software, AI tools, and browser extensions — not just App Store results.
 
 ---
 
-## Stack
+## Built with
 
-- Next.js 14 (React)
-- Two API proxy routes: `/api/claude` and `/api/reddit`
-- Reddit public JSON API (no auth required)
-- Apple iTunes Search + RSS API (no auth required)
-- Anthropic Claude API (key stored server-side only)
-# Niche Gap Analyzer
+Next.js · React · Anthropic Claude API · Reddit public API · Apple iTunes Search API
+
+---
+
+## Live
+
+[niche-gap.vercel.app](https://niche-gap.vercel.app)
+
+---
+
+*A [jasonpfields.com](https://jasonpfields.com) project.*
