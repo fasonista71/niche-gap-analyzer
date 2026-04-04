@@ -771,25 +771,74 @@ const DOMAINS = [
   { id: "home",         label: "Home & Real Estate",    emoji: "🏠", context: "home buying, renting, home maintenance, interior design, decluttering, smart home, moving, home inventory, landlord-tenant" },
 ];
 
-// ── Discovery: pure Claude knowledge scan, no external APIs ───────────────
-async function synthesizeDiscovery(domain, onChunk) {
-  onChunk("Scanning for opportunities…");
+// ── Discovery: zeitgeist scan across all domains ──────────────────────────
+const ALL_DOMAIN_CONTEXT = DOMAINS.map(d => `${d.label}: ${d.context}`).join("\n");
 
-  const prompt = `You are a sharp product strategist with deep knowledge of the app and SaaS landscape. Your job is to identify the most compelling unmet needs in the "${domain.label}" space as of 2024-2025.
+async function synthesizeZeitgeist(onChunk) {
+  onChunk("Scanning the zeitgeist…");
+
+  const prompt = `You are a sharp product strategist with deep knowledge of the 2024-2025 app and SaaS landscape. Your job is to identify the hottest unmet needs RIGHT NOW — opportunities that have emerged or intensified in the last 1-2 years due to shifts in behavior, technology, regulation, or culture.
+
+DOMAINS TO CONSIDER:
+${ALL_DOMAIN_CONTEXT}
+
+Scan ACROSS ALL DOMAINS and surface the 15 highest-signal opportunities regardless of category. These should feel timely — things that couldn't have been identified the same way 3 years ago.
+
+For each opportunity:
+- Account for ALL existing solutions: mobile apps, web apps, SaaS, desktop, AI tools, browser extensions
+- Be brutally honest — if Notion, Airtable, ChatGPT, or any known tool covers it well, say so and score low
+- Focus on genuine gaps where demand is expressed but supply is fragmented, expensive, or poorly UX'd
+- Note which domain it belongs to
+
+Scoring rules:
+- 70+: Real gap, clear rising demand, weak/absent solutions
+- 45-69: Real demand, meaningful competition exists, differentiation is possible
+- Below 45: Saturated or demand too diffuse
+- Be conservative — false hope is worse than honest low scores
+
+Return JSON only, no markdown fences:
+
+{
+  "scannedAt": "<current year-month e.g. 2025-04>",
+  "opportunities": [
+    {
+      "niche": "<3-6 word specific niche>",
+      "domain": "<Health & Wellness|Personal Finance|Productivity & Work|Creator Tools|Parenting & Family|Travel & Adventure|Food & Cooking|Pets & Animals|Learning & Education|Home & Real Estate>",
+      "opportunityScore": <0-100>,
+      "type": "<improve|whitespace>",
+      "demandStrength": "<HIGH|MEDIUM|LOW>",
+      "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
+      "trendDriver": "<one sentence: what behavior/tech/culture shift made this emerge now>",
+      "knownTools": "<2-4 key existing tools or 'None identified'>",
+      "verdict": "<one honest punchy sentence>",
+      "signalQuote": "<realistic paraphrase of what frustrated users say>",
+      "buildAngle": "<one specific sentence on what to build and how to differentiate>"
+    }
+  ]
+}
+
+Return exactly 15 opportunities ordered by opportunityScore descending. Be specific — "AI-generated content authenticity verification for journalists" beats "content verification".`;
+
+  return streamClaude(prompt, onChunk);
+}
+
+async function synthesizeDiscovery(domain, onChunk) {
+  onChunk(`Scanning ${domain.label}…`);
+
+  const prompt = `You are a sharp product strategist with deep knowledge of the 2024-2025 app and SaaS landscape. Identify the most compelling unmet needs in the "${domain.label}" space.
 
 DOMAIN CONTEXT: ${domain.context}
 
-Your task: identify 10 specific, validated opportunity niches in this space. For each one:
+For each opportunity:
 - Consider ALL existing solutions: mobile apps, web apps, SaaS tools, desktop software, browser extensions, AI tools
 - Be brutally honest about competition — if Notion, Airtable, or any well-known tool covers it, say so
 - Focus on gaps that are genuinely underserved, not just "nobody built a pretty version of X"
-- Weight toward niches where demand is clearly expressed but supply is fragmented, expensive, or poorly executed
 - Favor niches that have emerged or grown significantly in 2023-2025 (new behaviors, new pain points)
 
 Scoring rules:
-- opportunityScore 70+: Real gap, clear demand, weak or absent solutions
-- opportunityScore 45-69: Real demand but meaningful competition exists, differentiation is possible
-- opportunityScore below 45: Saturated or demand is too diffuse
+- 70+: Real gap, clear demand, weak or absent solutions
+- 45-69: Real demand but meaningful competition exists, differentiation is possible
+- Below 45: Saturated or demand too diffuse
 - Be conservative — it's better to score honestly low than give false hope
 
 Return JSON only, no markdown fences:
@@ -797,23 +846,26 @@ Return JSON only, no markdown fences:
 {
   "opportunities": [
     {
-      "niche": "<3-6 word specific niche — NOT generic>",
+      "niche": "<3-6 word specific niche>",
+      "domain": "${domain.label}",
       "opportunityScore": <0-100>,
       "type": "<improve|whitespace>",
       "demandStrength": "<HIGH|MEDIUM|LOW>",
       "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
-      "knownTools": "<2-4 existing tools covering this space — mobile apps, web tools, SaaS, AI tools — or 'None identified'>",
-      "verdict": "<one honest punchy sentence about whether this is a real opportunity>",
-      "signalQuote": "<a realistic quote or paraphrase of what frustrated users actually say about this — make it feel authentic>",
-      "buildAngle": "<one specific sentence: what to build and what differentiates it — or 'Gap too thin to recommend'>"
+      "trendDriver": "<one sentence: what shift made this emerge now>",
+      "knownTools": "<2-4 existing tools or 'None identified'>",
+      "verdict": "<one honest punchy sentence>",
+      "signalQuote": "<realistic paraphrase of what frustrated users say>",
+      "buildAngle": "<one specific sentence on what to build and how to differentiate>"
     }
   ]
 }
 
-Return exactly 10 opportunities. Order by opportunityScore descending. Be specific: "sleep quality tracking for night shift nurses" beats "sleep tracking".`;
+Return exactly 10 opportunities ordered by opportunityScore descending.`;
 
   return streamClaude(prompt, onChunk);
 }
+
 
 
 // ── Opportunity row -- must be a real component to use useState ────────────
@@ -867,50 +919,60 @@ function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor,
 }
 
 // ── Discovery Panel ────────────────────────────────────────────────────────
+// ── Discovery Panel ────────────────────────────────────────────────────────
 function DiscoveryPanel({ onDiveDeep }) {
+  const [mode, setMode] = useState("idle");
   const [selectedDomain, setSelectedDomain] = useState(null);
+  const [domainFilter, setDomainFilter] = useState(null);
   const [phase, setPhase] = useState("idle");
   const [phaseLabel, setPhaseLabel] = useState("");
   const [result, setResult] = useState(null);
   const [streamText, setStreamText] = useState("");
-  const [history, setHistory] = useState([]); // [{ domain, result }]
+  const [errorDetail, setErrorDetail] = useState("");
+  const [history, setHistory] = useState([]);
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 5;
   const accentDisc = "#ff6bff";
 
-  const [errorDetail, setErrorDetail] = useState("");
-
-  const run = async (domain) => {
-    setSelectedDomain(domain);
+  const runZeitgeist = async () => {
+    setMode("zeitgeist"); setSelectedDomain(null); setDomainFilter(null);
     setResult(null); setStreamText(""); setPage(0); setErrorDetail("");
     try {
       setPhase("synthesizing");
-      setPhaseLabel(`Scanning ${domain.label} for opportunities…`);
+      setPhaseLabel("Scanning the zeitgeist across all domains...");
+      const analysis = await synthesizeZeitgeist(p => setStreamText(p));
+      if (analysis) {
+        setResult(analysis);
+        setHistory(h => [{ mode: "zeitgeist", label: "Zeitgeist", emoji: "✨", result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
+        setPhase("done");
+      } else { setErrorDetail("Claude returned null."); setPhase("error"); }
+    } catch (e) { console.error(e); setErrorDetail(e?.message || String(e)); setPhase("error"); }
+  };
+
+  const runDomain = async (domain) => {
+    setMode("domain"); setSelectedDomain(domain); setDomainFilter(null);
+    setResult(null); setStreamText(""); setPage(0); setErrorDetail("");
+    try {
+      setPhase("synthesizing");
+      setPhaseLabel(`Deep scanning ${domain.label}...`);
       const analysis = await synthesizeDiscovery(domain, p => setStreamText(p));
       if (analysis) {
         setResult(analysis);
-        setHistory(h => [{ domain, result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
+        setHistory(h => [{ mode: "domain", label: domain.label, emoji: domain.emoji, result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
         setPhase("done");
-      } else {
-        setErrorDetail("Claude returned null — JSON parse may have failed. Check API key.");
-        setPhase("error");
-      }
-    } catch (e) {
-      console.error(e);
-      setErrorDetail(e?.message || String(e));
-      setPhase("error");
-    }
+      } else { setErrorDetail("Claude returned null."); setPhase("error"); }
+    } catch (e) { console.error(e); setErrorDetail(e?.message || String(e)); setPhase("error"); }
   };
 
   const clear = () => {
-    setSelectedDomain(null); setPhase("idle");
-    setResult(null); setStreamText(""); setPage(0);
+    setMode("idle"); setSelectedDomain(null); setDomainFilter(null);
+    setPhase("idle"); setResult(null); setStreamText(""); setPage(0); setErrorDetail("");
   };
 
   const restoreHistory = (item) => {
-    setSelectedDomain(item.domain);
-    setResult(item.result);
-    setPhase("done"); setPage(0);
+    setMode(item.mode);
+    setSelectedDomain(item.mode === "domain" ? DOMAINS.find(d => d.label === item.label) : null);
+    setDomainFilter(null); setResult(item.result); setPhase("done"); setPage(0);
   };
 
   const busy = phase === "synthesizing";
@@ -918,90 +980,109 @@ function DiscoveryPanel({ onDiveDeep }) {
   const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
   const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
 
-  const opps = result?.opportunities || [];
-  const totalPages = Math.ceil(opps.length / PAGE_SIZE);
-  const pageOpps = opps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const allOpps = result?.opportunities || [];
+  const filteredOpps = domainFilter ? allOpps.filter(o => o.domain === domainFilter) : allOpps;
+  const totalPages = Math.ceil(filteredOpps.length / PAGE_SIZE);
+  const pageOpps = filteredOpps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const domainCounts = allOpps.reduce((acc, o) => { acc[o.domain] = (acc[o.domain] || 0) + 1; return acc; }, {});
 
   return (
     <div>
-      {/* Context note */}
-      <div style={{ marginBottom: 24, padding: "14px 18px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}22`, borderRadius: 8 }}>
-        <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.7, letterSpacing: "0.05em" }}>
-          Pick a domain. Discovery scans the landscape using AI knowledge of the app, SaaS, and web tool ecosystem — surfacing 10 ranked opportunities with known competition, honest scoring, and a build angle. No rate limits, no external API calls.
-        </p>
+      {/* Zeitgeist CTA */}
+      <div style={{ marginBottom: 28 }}>
+        <button onClick={() => !busy && runZeitgeist()} disabled={busy}
+          style={{ width: "100%", padding: "22px 32px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}44`, borderRadius: 10, cursor: busy ? "default" : "pointer", textAlign: "left", transition: "border-color .2s, background .2s" }}
+          onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.background = `${accentDisc}18`; }}}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = accentDisc + "44"; e.currentTarget.style.background = `${accentDisc}0d`; }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <span style={{ fontSize: 22 }}>✨</span>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc }}>Scan the Zeitgeist</span>
+              </div>
+              <p style={{ fontFamily: "'Instrument Serif', serif", fontSize: 17, color: C.text, lineHeight: 1.4 }}>What does the internet want that nobody's built yet — right now, across every domain?</p>
+              <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, marginTop: 6 }}>Returns 15 cross-domain opportunities ranked by signal strength</p>
+            </div>
+            {busy && mode === "zeitgeist" ? <Pulse color={accentDisc} /> : <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 20, color: accentDisc, marginLeft: 24 }}>{busy ? "" : "→"}</div>}
+          </div>
+        </button>
       </div>
 
       {/* Domain grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))", gap: 10, marginBottom: 20 }}>
-        {DOMAINS.map(domain => (
-          <button key={domain.id} onClick={() => !busy && run(domain)}
-            disabled={busy}
-            style={{
-              background: selectedDomain?.id === domain.id && phase === "done" ? `${accentDisc}15` : C.surface,
-              border: `1px solid ${selectedDomain?.id === domain.id && phase === "done" ? accentDisc + "66" : C.border}`,
-              borderRadius: 8, padding: "14px 16px", cursor: busy ? "default" : "pointer",
-              textAlign: "left", transition: "border-color .2s, background .2s",
-              opacity: busy && selectedDomain?.id !== domain.id ? 0.4 : 1,
-            }}
-            onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "88"; e.currentTarget.style.background = `${accentDisc}0d`; }}}
-            onMouseLeave={e => { if (!(selectedDomain?.id === domain.id && phase === "done")) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
-            <div style={{ fontSize: 20, marginBottom: 8 }}>{domain.emoji}</div>
-            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id && phase === "done" ? accentDisc : C.textDim, marginBottom: 4 }}>{domain.label}</div>
-            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, lineHeight: 1.5 }}>{domain.context.split(",").slice(0,3).join(" ·")}</div>
-          </button>
-        ))}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: C.muted, marginBottom: 12 }}>Or deep-dive a specific domain</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(165px, 1fr))", gap: 8 }}>
+          {DOMAINS.map(domain => (
+            <button key={domain.id} onClick={() => !busy && runDomain(domain)} disabled={busy}
+              style={{ background: selectedDomain?.id === domain.id && phase === "done" ? `${accentDisc}15` : C.surface, border: `1px solid ${selectedDomain?.id === domain.id && phase === "done" ? accentDisc + "55" : C.border}`, borderRadius: 8, padding: "12px 14px", cursor: busy ? "default" : "pointer", textAlign: "left", transition: "border-color .2s, background .2s", opacity: busy && selectedDomain?.id !== domain.id ? 0.35 : 1 }}
+              onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "66"; e.currentTarget.style.background = `${accentDisc}0a`; }}}
+              onMouseLeave={e => { if (!(selectedDomain?.id === domain.id && phase === "done")) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
+              <div style={{ fontSize: 18, marginBottom: 6 }}>{domain.emoji}</div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id && phase === "done" ? accentDisc : C.textDim }}>{domain.label}</div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Status */}
       {busy && (
-        <div style={{ marginBottom: 16, padding: "16px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ marginTop: 20, padding: "16px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", alignItems: "center", gap: 12 }}>
           <Pulse color={accentDisc} />
           <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: C.textDim }}>{phaseLabel}</span>
         </div>
       )}
       {phase === "synthesizing" && streamText && (
-        <div style={{ marginBottom: 12, padding: "14px 18px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 100, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 60%,transparent)" }}>{streamText.slice(-400)}</div>
+        <div style={{ marginTop: 8, padding: "14px 18px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 100, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 60%,transparent)" }}>{streamText.slice(-400)}</div>
       )}
       {phase === "error" && (
-        <div style={{ padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
-          <div>Sweep failed. Check your connection and try again.</div>
+        <div style={{ marginTop: 16, padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
+          <div>Scan failed. Try again.</div>
           {errorDetail && <div style={{ marginTop: 8, fontSize: 10, color: C.textDim, wordBreak: "break-all" }}>{errorDetail}</div>}
         </div>
       )}
 
-      {/* Results table */}
-      {phase === "done" && opps.length > 0 && (
-        <div style={{ animation: "fadeUp .5s ease both" }}>
-
-          {/* Results header with clear button */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+      {/* Results */}
+      {phase === "done" && allOpps.length > 0 && (
+        <div style={{ marginTop: 24, animation: "fadeUp .5s ease both" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
               <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentDisc }}>
-                {opps.length} Opportunities — {selectedDomain?.label}
+                {mode === "zeitgeist" ? `${allOpps.length} Cross-Domain Opportunities` : `${allOpps.length} ${selectedDomain?.label} Opportunities`}
               </h3>
-              {totalPages > 1 && (
-                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
-                  page {page + 1} of {totalPages}
-                </span>
-              )}
+              {totalPages > 1 && <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>page {page + 1} of {totalPages}</span>}
             </div>
-            <button onClick={clear}
-              style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", transition: "border-color .2s, color .2s" }}
+            <button onClick={clear} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", transition: "border-color .2s, color .2s" }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = C.red; e.currentTarget.style.color = C.red; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.muted; }}>
               ✕ Clear
             </button>
           </div>
 
+          {/* Domain filter chips — zeitgeist only */}
+          {mode === "zeitgeist" && Object.keys(domainCounts).length > 1 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+              <button onClick={() => { setDomainFilter(null); setPage(0); }}
+                style={{ background: !domainFilter ? accentDisc : C.surface, color: !domainFilter ? C.bg : C.textDim, border: `1px solid ${!domainFilter ? accentDisc : C.border}`, cursor: "pointer", padding: "4px 10px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                All {allOpps.length}
+              </button>
+              {Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).map(([domain, count]) => {
+                const d = DOMAINS.find(x => x.label === domain);
+                return (
+                  <button key={domain} onClick={() => { setDomainFilter(domain); setPage(0); }}
+                    style={{ background: domainFilter === domain ? `${accentDisc}22` : C.surface, color: domainFilter === domain ? accentDisc : C.textDim, border: `1px solid ${domainFilter === domain ? accentDisc + "55" : C.border}`, cursor: "pointer", padding: "4px 10px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 4 }}>
+                    {d?.emoji} {domain.split(" ")[0]} {count}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-            {/* Table header */}
             <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px", gap: 0, padding: "10px 20px", borderBottom: `1px solid ${C.border}` }}>
               {["Score", "Niche + Verdict", "Type", "Demand", "Competition", ""].map((h, i) => (
                 <div key={i} style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted }}>{h}</div>
               ))}
             </div>
-
-            {/* Table rows — current page only */}
             {pageOpps.map((opp, i) => (
               <OpportunityRow key={`${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
                 onDiveDeep={onDiveDeep} accentDisc={accentDisc}
@@ -1009,12 +1090,11 @@ function DiscoveryPanel({ onDiveDeep }) {
             ))}
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
                 style={{ background: page === 0 ? C.border : C.surface, border: `1px solid ${C.border}`, color: page === 0 ? C.muted : C.text, cursor: page === 0 ? "default" : "pointer", padding: "6px 14px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                ← Prev
+                Prev
               </button>
               {Array.from({ length: totalPages }, (_, i) => (
                 <button key={i} onClick={() => setPage(i)}
@@ -1024,31 +1104,28 @@ function DiscoveryPanel({ onDiveDeep }) {
               ))}
               <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page === totalPages - 1}
                 style={{ background: page === totalPages - 1 ? C.border : C.surface, border: `1px solid ${C.border}`, color: page === totalPages - 1 ? C.muted : C.text, cursor: page === totalPages - 1 ? "default" : "pointer", padding: "6px 14px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                Next →
+                Next
               </button>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, marginLeft: 4 }}>
-                {opps.length} total · {PAGE_SIZE} per page
-              </span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>{filteredOpps.length} total</span>
             </div>
           )}
-
-          <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>
-            Hit "Dive Deep →" on any row to pre-fill B2C, then switch tabs for a full analysis.
-          </p>
+          <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>Hit "Dive Deep" on any row to pre-fill B2C for a full analysis.</p>
         </div>
       )}
 
       {/* History */}
-      {history.length > 0 && phase !== "fetching" && phase !== "synthesizing" && (
-        <div style={{ marginTop: 40 }}>
+      {history.length > 0 && !busy && (
+        <div style={{ marginTop: 36 }}>
           <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: C.muted, marginBottom: 12 }}>Recent Scans</h3>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {history.map((h, i) => (
               <button key={i} onClick={() => restoreHistory(h)}
-                style={{ background: selectedDomain?.id === h.domain.id && phase === "done" && result === h.result ? `${accentDisc}15` : C.surface, border: `1px solid ${selectedDomain?.id === h.domain.id && result === h.result ? accentDisc + "44" : C.border}`, color: C.textDim, fontSize: 12, padding: "6px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'DM Mono', monospace", display: "flex", alignItems: "center", gap: 8, transition: "border-color .2s" }}>
-                <span style={{ fontSize: 14 }}>{h.domain.emoji}</span>
-                <span>{h.domain.label}</span>
-                <span style={{ color: C.muted }}>{h.result?.opportunities?.length || 0} opps</span>
+                style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, padding: "6px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'DM Mono', monospace", display: "flex", alignItems: "center", gap: 8 }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = accentDisc + "55"}
+                onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+                <span>{h.emoji}</span>
+                <span>{h.label}</span>
+                <span style={{ color: C.muted }}>{h.result?.opportunities?.length || 0}</span>
               </button>
             ))}
           </div>
@@ -1057,6 +1134,7 @@ function DiscoveryPanel({ onDiveDeep }) {
     </div>
   );
 }
+
 
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Home() {
