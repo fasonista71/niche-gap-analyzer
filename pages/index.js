@@ -245,6 +245,12 @@ async function streamClaude(prompt, onChunk) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1400, stream: true, messages: [{ role: "user", content: prompt }] }),
   });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "unknown");
+    throw new Error(`Claude API ${response.status}: ${errText.slice(0, 200)}`);
+  }
+
   let fullText = "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -255,7 +261,12 @@ async function streamClaude(prompt, onChunk) {
       try { const j = JSON.parse(line.slice(6)); if (j.type === "content_block_delta") { fullText += j.delta?.text || ""; onChunk(fullText); } } catch {}
     }
   }
-  try { return JSON.parse(fullText.replace(/```json|```/g, "").trim()); } catch { return null; }
+  try {
+    return JSON.parse(fullText.replace(/```json|```/g, "").trim());
+  } catch (e) {
+    console.error("JSON parse failed. Raw text:", fullText.slice(0, 500));
+    throw new Error(`JSON parse failed: ${e.message}. Got: ${fullText.slice(0, 100)}`);
+  }
 }
 
 // ── Shared results renderer ────────────────────────────────────────────────
@@ -860,9 +871,11 @@ function DiscoveryPanel({ onDiveDeep }) {
   const PAGE_SIZE = 5;
   const accentDisc = "#ff6bff";
 
+  const [errorDetail, setErrorDetail] = useState("");
+
   const run = async (domain) => {
     setSelectedDomain(domain);
-    setResult(null); setStreamText(""); setPage(0);
+    setResult(null); setStreamText(""); setPage(0); setErrorDetail("");
     try {
       setPhase("synthesizing");
       setPhaseLabel(`Scanning ${domain.label} for opportunities…`);
@@ -871,8 +884,15 @@ function DiscoveryPanel({ onDiveDeep }) {
         setResult(analysis);
         setHistory(h => [{ domain, result: analysis, ts: Date.now() }, ...h.slice(0, 9)]);
         setPhase("done");
-      } else setPhase("error");
-    } catch (e) { console.error(e); setPhase("error"); }
+      } else {
+        setErrorDetail("Claude returned null — JSON parse may have failed. Check API key.");
+        setPhase("error");
+      }
+    } catch (e) {
+      console.error(e);
+      setErrorDetail(e?.message || String(e));
+      setPhase("error");
+    }
   };
 
   const clear = () => {
@@ -936,7 +956,10 @@ function DiscoveryPanel({ onDiveDeep }) {
         <div style={{ marginBottom: 12, padding: "14px 18px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 100, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 60%,transparent)" }}>{streamText.slice(-400)}</div>
       )}
       {phase === "error" && (
-        <div style={{ padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Sweep failed. Check your connection and try again.</div>
+        <div style={{ padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>
+          <div>Sweep failed. Check your connection and try again.</div>
+          {errorDetail && <div style={{ marginTop: 8, fontSize: 10, color: C.textDim, wordBreak: "break-all" }}>{errorDetail}</div>}
+        </div>
       )}
 
       {/* Results table */}
