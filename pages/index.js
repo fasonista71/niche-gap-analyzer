@@ -445,8 +445,11 @@ function Results({ result, appData, query, competitors, mode }) {
 }
 
 // ── B2C Panel ──────────────────────────────────────────────────────────────
-function B2CPanel() {
+function B2CPanel({ prefill, onPrefillConsumed }) {
   const [query, setQuery] = useState("");
+
+  // consume prefill from Discovery dive-deep
+  useState(() => { if (prefill) { setQuery(prefill); onPrefillConsumed?.(); } }, [prefill]);
   const [competitors, setCompetitors] = useState([]);
   const [subreddits, setSubreddits] = useState([]);
   const [useCustomOnly, setUseCustomOnly] = useState(false);
@@ -683,9 +686,288 @@ function B2BPanel() {
   );
 }
 
+// ── Discovery domain config ────────────────────────────────────────────────
+const DOMAINS = [
+  { id: "health",      label: "Health & Wellness",    emoji: "🏃", subs: ["loseit","fitness","mentalhealth","sleep","nutrition","meditation","running","swimming"], appCategory: "Health & Fitness",   queries: ["symptom tracker","mental wellness","sleep aid","chronic illness","workout planner"] },
+  { id: "finance",     label: "Personal Finance",     emoji: "💰", subs: ["personalfinance","frugal","financialindependence","investing","povertyfinance","debtfree"], appCategory: "Finance",           queries: ["budget tracker","expense splitting","debt payoff","savings goal","subscription tracker"] },
+  { id: "productivity",label: "Productivity & Work",  emoji: "⚡", subs: ["productivity","ADHD","getdisciplined","selfimprovement","nosurf","digitalminimalism"], appCategory: "Productivity",       queries: ["task management","focus timer","habit tracker","note taking","time blocking"] },
+  { id: "creator",     label: "Creator Tools",        emoji: "🎨", subs: ["juststart","youtubers","podcasting","content_marketing","NewTubers","graphic_design"], appCategory: "Photo & Video",     queries: ["content calendar","video editing","thumbnail maker","social media scheduler","audience analytics"] },
+  { id: "parenting",   label: "Parenting & Family",   emoji: "👨‍👩‍👧", subs: ["Parenting","daddit","Mommit","beyondthebump","SingleParents","autism"], appCategory: "Lifestyle",           queries: ["baby tracker","chore chart","family calendar","screen time","homework helper"] },
+  { id: "travel",      label: "Travel & Adventure",   emoji: "✈️", subs: ["travel","solotravel","digitalnomad","backpacking","roadtrip","camping"], appCategory: "Travel",             queries: ["trip planner","packing list","travel budget","visa tracker","offline maps"] },
+  { id: "food",        label: "Food & Cooking",        emoji: "🍳", subs: ["MealPrepSunday","EatCheapAndHealthy","recipes","veganrecipes","keto","intermittentfasting"], appCategory: "Food & Drink",    queries: ["meal planner","recipe manager","grocery list","calorie tracker","restaurant finder"] },
+  { id: "pets",        label: "Pets & Animals",        emoji: "🐾", subs: ["dogs","cats","puppy101","DogAdvice","AskVet","petadvice"], appCategory: "Lifestyle",           queries: ["pet health tracker","vet reminder","dog training","pet medication","pet sitter"] },
+  { id: "learning",    label: "Learning & Education",  emoji: "📚", subs: ["learnprogramming","languagelearning","IWantToLearn","GetStudying","slatestarcodex"], appCategory: "Education",          queries: ["language learning","flashcard maker","study planner","online courses","skill tracker"] },
+  { id: "home",        label: "Home & Real Estate",    emoji: "🏠", subs: ["FirstTimeHomeBuyer","HomeImprovement","malelivingspace","femalelivingspace","IKEA","DIY"], appCategory: "Lifestyle",       queries: ["home inventory","rent tracker","home maintenance","interior design","moving checklist"] },
+];
+
+const DISCOVERY_PATTERNS = [
+  `"I wish there was an app"`,
+  `"why isn't there an app"`,
+  `"does anyone know a good app"`,
+  `"nothing works for"`,
+  `"frustrated with" app`,
+  `"is there anything that"`,
+];
+
+async function runDiscoverySweep(domain, onProgress) {
+  const subs = domain.subs.join("+");
+
+  // Fire Reddit searches in parallel -- pattern searches + query searches
+  onProgress("Scanning Reddit for pain signals…");
+  const patternSearches = DISCOVERY_PATTERNS.slice(0, 4).map(pattern =>
+    redditFetch(`https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(pattern)}&sort=relevance&limit=10&restrict_sr=true&t=year`)
+      .then(d => (d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })))
+      .catch(() => [])
+  );
+
+  const querySearches = domain.queries.slice(0, 3).map(q =>
+    redditFetch(`https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(q + " problem")}&sort=relevance&limit=8&restrict_sr=true&t=year`)
+      .then(d => (d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })))
+      .catch(() => [])
+  );
+
+  const allResults = await Promise.all([...patternSearches, ...querySearches]);
+  const seen = new Set();
+  const posts = allResults.flat()
+    .filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 40);
+
+  // App Store top apps in category
+  onProgress("Pulling App Store category signals…");
+  let appReviews = [];
+  try {
+    for (const q of domain.queries.slice(0, 2)) {
+      const s = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=software&limit=3&country=us`).then(r => r.json());
+      for (const app of (s?.results || []).slice(0, 2)) {
+        const rv = await fetch(`https://itunes.apple.com/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`).then(r => r.json());
+        const lowRated = (rv?.feed?.entry || []).slice(1)
+          .map(e => ({ app: app.trackName, title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") }))
+          .filter(r => r.rating <= 2).slice(0, 4);
+        appReviews = [...appReviews, ...lowRated];
+      }
+    }
+  } catch {}
+
+  return { posts, appReviews };
+}
+
+async function synthesizeDiscovery(domain, posts, appReviews, onChunk) {
+  const redditSummary = posts.slice(0, 25).map(p =>
+    `[r/${p.subreddit} ↑${p.score}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 150)}` : ""}`
+  ).join("\n");
+
+  const reviewSummary = appReviews.slice(0, 15).map(r =>
+    `[${r.app}] ★${r.rating} "${r.title}": ${r.content?.slice(0, 150)}`
+  ).join("\n");
+
+  const prompt = `You are a sharp product opportunity researcher scanning the "${domain.label}" space for unmet needs.
+
+REDDIT SIGNALS from ${domain.label} communities:
+${redditSummary || "No signals found."}
+
+APP STORE LOW-RATED REVIEWS (${domain.label} apps):
+${reviewSummary || "No reviews found."}
+
+Identify the 5-7 most compelling unmet needs or opportunity areas — things people are clearly asking for, complaining about, or working around that don't have a good solution yet.
+
+For each opportunity, assess:
+- Is this an improvement opportunity (existing bad solutions) or whitespace (nothing exists)?
+- How strong is the demand signal?
+- How competitive is the space?
+
+Respond JSON only, no markdown:
+
+{
+  "opportunities": [
+    {
+      "niche": "<3-5 word niche name, specific not generic>",
+      "opportunityScore": <0-100>,
+      "type": "<improve|whitespace>",
+      "demandStrength": "<HIGH|MEDIUM|LOW>",
+      "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
+      "verdict": "<one punchy sentence — what the opportunity is>",
+      "signalQuote": "<most compelling verbatim quote or post title from the data>",
+      "buildAngle": "<one specific sentence on what to build or how to differentiate>"
+    }
+  ]
+}
+
+Order by opportunityScore descending. Be specific — "sleep quality during pregnancy" beats "sleep tracking".`;
+
+  return streamClaude(prompt, onChunk);
+}
+
+// ── Discovery Panel ────────────────────────────────────────────────────────
+function DiscoveryPanel({ onDiveDeep }) {
+  const [selectedDomain, setSelectedDomain] = useState(null);
+  const [phase, setPhase] = useState("idle");
+  const [phaseLabel, setPhaseLabel] = useState("");
+  const [result, setResult] = useState(null);
+  const [streamText, setStreamText] = useState("");
+  const accentDisc = "#ff6bff"; // magenta for discovery
+
+  const run = async (domain) => {
+    setSelectedDomain(domain);
+    setResult(null); setStreamText("");
+    try {
+      setPhase("fetching");
+      const { posts, appReviews } = await runDiscoverySweep(domain, label => setPhaseLabel(label));
+      setPhase("synthesizing");
+      setPhaseLabel(`Identifying opportunities in ${domain.label}…`);
+      const analysis = await synthesizeDiscovery(domain, posts, appReviews, p => setStreamText(p));
+      if (analysis) { setResult(analysis); setPhase("done"); }
+      else setPhase("error");
+    } catch (e) { console.error(e); setPhase("error"); }
+  };
+
+  const busy = phase === "fetching" || phase === "synthesizing";
+  const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
+  const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
+  const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
+
+  return (
+    <div>
+      {/* Context note */}
+      <div style={{ marginBottom: 24, padding: "14px 18px", background: `${accentDisc}0d`, border: `1px solid ${accentDisc}22`, borderRadius: 8 }}>
+        <p style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.7, letterSpacing: "0.05em" }}>
+          Pick a domain to scan. Discovery runs a broad sweep across domain-specific subreddits and App Store reviews, then surfaces the top opportunities ranked by signal strength. Click any row to dive deep in B2C or B2B mode.
+        </p>
+      </div>
+
+      {/* Domain grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10, marginBottom: 28 }}>
+        {DOMAINS.map(domain => (
+          <button key={domain.id} onClick={() => !busy && run(domain)}
+            disabled={busy}
+            style={{
+              background: selectedDomain?.id === domain.id ? `${accentDisc}15` : C.surface,
+              border: `1px solid ${selectedDomain?.id === domain.id ? accentDisc + "66" : C.border}`,
+              borderRadius: 8, padding: "14px 16px", cursor: busy ? "default" : "pointer",
+              textAlign: "left", transition: "border-color .2s, background .2s",
+              opacity: busy && selectedDomain?.id !== domain.id ? 0.4 : 1,
+            }}
+            onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "88"; e.currentTarget.style.background = `${accentDisc}0d`; }}}
+            onMouseLeave={e => { if (selectedDomain?.id !== domain.id) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.surface; }}}>
+            <div style={{ fontSize: 20, marginBottom: 8 }}>{domain.emoji}</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: selectedDomain?.id === domain.id ? accentDisc : C.textDim, marginBottom: 4 }}>{domain.label}</div>
+            <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted }}>{domain.subs.slice(0,3).map(s => `r/${s}`).join(" · ")}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Status */}
+      {busy && (
+        <div style={{ marginBottom: 16, padding: "16px 20px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, display: "flex", alignItems: "center", gap: 12 }}>
+          <Pulse color={accentDisc} />
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 12, color: C.textDim }}>{phaseLabel}</span>
+        </div>
+      )}
+      {phase === "synthesizing" && streamText && (
+        <div style={{ marginBottom: 12, padding: "14px 18px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 100, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 60%,transparent)" }}>{streamText.slice(-400)}</div>
+      )}
+      {phase === "error" && (
+        <div style={{ padding: 20, border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6, color: C.red, fontFamily: "'DM Mono', monospace", fontSize: 12 }}>Sweep failed. Check your connection and try again.</div>
+      )}
+
+      {/* Results table */}
+      {phase === "done" && result?.opportunities?.length > 0 && (
+        <div style={{ animation: "fadeUp .5s ease both" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 16 }}>
+            <h3 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentDisc }}>
+              {result.opportunities.length} Opportunities Found
+            </h3>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>— {selectedDomain?.label} · click any row to dive deep</span>
+          </div>
+
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            {/* Table header */}
+            <div style={{ display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 80px 32px", gap: 0, padding: "10px 20px", borderBottom: `1px solid ${C.border}` }}>
+              {["Score", "Niche + Verdict", "Type", "Demand", "Competition", "Build Angle", ""].map((h, i) => (
+                <div key={i} style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: C.muted }}>{h}</div>
+              ))}
+            </div>
+
+            {/* Table rows */}
+            {result.opportunities.map((opp, i) => (
+              <div key={i}
+                onClick={() => onDiveDeep(opp.niche, opp.competitionLevel === "SATURATED" || opp.competitionLevel === "MODERATE" ? "b2c" : "b2c")}
+                style={{
+                  display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 80px 32px",
+                  gap: 0, padding: "16px 20px",
+                  borderBottom: i < result.opportunities.length - 1 ? `1px solid ${C.border}` : "none",
+                  cursor: "pointer", transition: "background .15s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}08`}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+
+                {/* Score */}
+                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, paddingTop: 2 }}>
+                  {opp.opportunityScore}
+                </div>
+
+                {/* Niche + verdict */}
+                <div style={{ paddingRight: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
+                  <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
+                  {opp.signalQuote && (
+                    <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 80)}…"</div>
+                  )}
+                </div>
+
+                {/* Type */}
+                <div>
+                  <span style={{
+                    display: "inline-block", fontFamily: "'DM Mono', monospace", fontSize: 9,
+                    letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 2,
+                    background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`,
+                    color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700,
+                  }}>{opp.type}</span>
+                </div>
+
+                {/* Demand */}
+                <div>
+                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: demandColor(opp.demandStrength), fontWeight: 600 }}>
+                    {opp.demandStrength}
+                  </span>
+                </div>
+
+                {/* Competition */}
+                <div>
+                  <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>
+                    {opp.competitionLevel}
+                  </span>
+                </div>
+
+                {/* Build angle */}
+                <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.4, paddingRight: 8 }}>
+                  {opp.buildAngle?.slice(0, 60)}{opp.buildAngle?.length > 60 ? "…" : ""}
+                </div>
+
+                {/* Arrow */}
+                <div style={{ color: accentDisc, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "flex-end" }}>→</div>
+              </div>
+            ))}
+          </div>
+
+          <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>
+            Click any row to pre-fill the B2C or B2B tab for a full deep-dive analysis.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ──────────────────────────────────────────────────────────────
 export default function Home() {
   const [activeTab, setActiveTab] = useState("b2c");
+  const [b2cPrefill, setB2cPrefill] = useState(null);
+
+  const handleDiveDeep = (niche, mode) => {
+    setB2cPrefill(niche);
+    setActiveTab(mode || "b2c");
+  };
 
   return (
     <>
@@ -706,7 +988,7 @@ export default function Home() {
 
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }}/>
-        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
+        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
 
         <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
 
@@ -720,21 +1002,22 @@ export default function Home() {
                   <path d="M7 4v6M4 7h6" stroke={C.bg} strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
               </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
             </div>
             <h1 style={{ fontFamily: "'Instrument Serif', serif", fontSize: "clamp(32px,5vw,52px)", fontWeight: 400, lineHeight: 1.1, marginBottom: 12 }}>
-              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
+              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
             <p style={{ color: C.textDim, fontSize: 15, maxWidth: 500, lineHeight: 1.6 }}>
-              Cross-references Reddit pain signals with competitive gaps. Target specific subreddits. Separate B2C and B2B analysis modes.
+              Validate a niche in B2C or B2B mode, or run Discovery to scan an entire domain for the strongest unmet needs.
             </p>
           </div>
 
           {/* Tabs */}
           <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
             {[
-              { key: "b2c", label: "B2C — Consumer Apps", accent: C.accent, sub: "App Store · consumer Reddit" },
-              { key: "b2b", label: "B2B — SaaS & Tools", accent: C.accentB2B, sub: "Professional communities · enterprise" },
+              { key: "b2c",      label: "B2C — Consumer Apps",  accent: C.accent,     sub: "App Store · consumer Reddit" },
+              { key: "b2b",      label: "B2B — SaaS & Tools",   accent: C.accentB2B,  sub: "Professional communities · enterprise" },
+              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Scan a domain · find opportunities" },
             ].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
                 background: "none", border: "none", cursor: "pointer", padding: "12px 24px 14px",
@@ -748,12 +1031,14 @@ export default function Home() {
           </div>
 
           {/* Active panel */}
-          {activeTab === "b2c" ? <B2CPanel /> : <B2BPanel />}
+          {activeTab === "b2c" && <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} />}
+          {activeTab === "b2b" && <B2BPanel />}
+          {activeTab === "discover" && <DiscoveryPanel onDiveDeep={handleDiveDeep} />}
 
           {/* Footer */}
           <div style={{ marginTop: 60, paddingTop: 20, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>SOURCES: Reddit API · App Store RSS · Claude Synthesis</span>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>v0.3 · jasonpfields.com</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>v0.4 · jasonpfields.com</span>
           </div>
 
         </div>
