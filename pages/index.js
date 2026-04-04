@@ -1215,6 +1215,151 @@ function DiscoveryPanel({ onDiveDeep, onSave }) {
 }
 
 
+// ── Competitive Landscape export utilities ─────────────────────────────────
+function exportLandscapeMarkdown(space, competitors, result) {
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const lines = [
+    `# Competitive Landscape: ${space}`,
+    `*Generated ${date} · niche-gap.vercel.app*`,
+    `**Competitors analyzed:** ${competitors.join(", ")}`,
+    `**Market maturity:** ${result.marketMaturity || "N/A"}`,
+    `\n---\n`,
+    `## Overview\n\n${result.landscapeSummary}`,
+    result.recommendedPositioning ? `\n**Positioning:** "${result.recommendedPositioning}"` : "",
+    `\n---\n`,
+    `## Competitor Breakdown\n`,
+  ];
+
+  result.competitors?.forEach(c => {
+    lines.push(`### ${c.name}`);
+    lines.push(`★${c.rating?.toFixed(1)} · ${c.reviewCount?.toLocaleString()} reviews · ${c.price} · Sentiment: ${c.userSentiment} · Vulnerability: ${c.vulnerabilityScore}/100`);
+    lines.push(`\n**Built for:** ${c.targetUser || "N/A"}`);
+    lines.push(`\n**Strength:** ${c.strengthSummary || "N/A"}`);
+    if (c.topComplaints?.length) lines.push(`\n**Top complaints:**\n${c.topComplaints.map(x => `- ${x}`).join("\n")}`);
+    if (c.missingFeatures?.length) lines.push(`\n**Missing features:**\n${c.missingFeatures.map(x => `- ${x}`).join("\n")}`);
+    lines.push("\n");
+  });
+
+  lines.push(`---\n`);
+  lines.push(`## Shared Weaknesses\n`);
+  result.sharedWeaknesses?.forEach(w => lines.push(`- ${w}`));
+  lines.push(`\n## Whitespace Opportunity\n\n> "${result.whitespaceOpportunity}"`);
+  if (result.priceGap && result.priceGap !== "None identified") lines.push(`\n## Price Gap\n\n${result.priceGap}`);
+  if (result.winningAngle) lines.push(`\n## Winning Angle\n\n${result.winningAngle}`);
+  lines.push(`\n---\n*Sources: App Store RSS · Reddit API · Claude Synthesis*`);
+
+  const blob = new Blob([lines.filter(Boolean).join("\n")], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `landscape-${space.replace(/\s+/g, "-").toLowerCase()}-${Date.now()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportLandscapeHTML(space, competitors, result) {
+  const date = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const vulnColor = s => s >= 70 ? "#47ffb2" : s >= 45 ? "#ffab47" : "#ff4d4d";
+  const sentColor = s => s === "POSITIVE" ? "#47ffb2" : s === "NEGATIVE" ? "#ff4d4d" : "#ffab47";
+
+  const competitorCards = (result.competitors || []).map(c => `
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-name">${c.name}</div>
+          <div class="card-meta">★${c.rating?.toFixed(1)} · ${c.reviewCount?.toLocaleString()} reviews · ${c.price}</div>
+        </div>
+        <div class="vuln-score" style="color:${vulnColor(c.vulnerabilityScore)}">${c.vulnerabilityScore}<span class="vuln-label">vuln</span></div>
+      </div>
+      <div class="sent-row">
+        <span class="sent-tag" style="color:${sentColor(c.userSentiment)};border-color:${sentColor(c.userSentiment)}44">${c.userSentiment}</span>
+        ${c.targetUser ? `<span class="for-user">for ${c.targetUser}</span>` : ""}
+      </div>
+      ${c.strengthSummary ? `<div class="section-label green">Strength</div><p class="body-text">${c.strengthSummary}</p>` : ""}
+      ${c.topComplaints?.length ? `<div class="section-label red">Top Complaints</div>${c.topComplaints.map(x => `<div class="list-item"><span class="red">⚠</span>${x}</div>`).join("")}` : ""}
+      ${c.missingFeatures?.length ? `<div class="section-label orange">Missing</div>${c.missingFeatures.map(x => `<div class="list-item"><span class="orange">→</span>${x}</div>`).join("")}` : ""}
+    </div>`).join("");
+
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>Landscape: ${space}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0b;color:#e2e2e8;font-family:'DM Sans',sans-serif;max-width:960px;margin:0 auto;padding:48px 32px 80px}
+h1{font-family:'Instrument Serif',serif;font-size:38px;font-weight:400;line-height:1.1;margin-bottom:8px}
+h1 em{color:#47ffb2;font-style:italic}
+h2{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:#8888a0;margin-bottom:14px}
+.meta{font-family:'DM Mono',monospace;font-size:11px;color:#4a4a5a;margin-bottom:28px}
+.tag{display:inline-block;font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:#0a0a0b;padding:2px 8px;border-radius:2px;font-weight:700;margin-right:6px}
+.summary-box{background:#111114;border:1px solid #47ffb244;border-radius:8px;padding:22px 24px;margin-bottom:20px}
+.summary-text{font-size:14px;color:#8888a0;line-height:1.7;margin-bottom:14px}
+.positioning{padding:10px 14px;background:rgba(71,255,178,0.07);border:1px solid rgba(71,255,178,0.2);border-radius:5px}
+.pos-label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:#47ffb2;display:block;margin-bottom:4px}
+.pos-text{font-family:'Instrument Serif',serif;font-size:15px;font-style:italic;line-height:1.5}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:20px}
+.card{background:#111114;border:1px solid #1e1e24;border-radius:8px;padding:18px 20px}
+.card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+.card-name{font-size:15px;font-weight:700;margin-bottom:3px}
+.card-meta{font-family:'DM Mono',monospace;font-size:10px;color:#8888a0}
+.vuln-score{font-family:'DM Mono',monospace;font-size:22px;font-weight:700;line-height:1;text-align:right}
+.vuln-label{display:block;font-size:8px;letter-spacing:0.1em;text-transform:uppercase;color:#4a4a5a}
+.sent-row{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.sent-tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;padding:2px 7px;border-radius:2px;border:1px solid}
+.for-user{font-family:'DM Mono',monospace;font-size:9px;color:#4a4a5a}
+.section-label{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;margin:10px 0 6px}
+.section-label.green{color:#47ffb2}.section-label.red{color:#ff4d4d}.section-label.orange{color:#ffab47}
+.body-text{font-size:12px;color:#8888a0;line-height:1.5}
+.list-item{display:flex;gap:6px;margin-bottom:4px;font-size:12px;color:#8888a0;line-height:1.4;align-items:flex-start}
+.red{color:#ff4d4d}.orange{color:#ffab47}.green{color:#47ffb2}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+section{background:#111114;border:1px solid #1e1e24;border-radius:8px;padding:20px 22px}
+.whitespace-box{padding:14px 18px;background:rgba(71,255,178,0.07);border:1px solid rgba(71,255,178,0.22);border-radius:6px}
+.whitespace-text{font-family:'Instrument Serif',serif;font-size:15px;font-style:italic;line-height:1.6}
+.footer{font-family:'DM Mono',monospace;font-size:10px;color:#4a4a5a;display:flex;justify-content:space-between;margin-top:32px;padding-top:20px;border-top:1px solid #1e1e24}
+@media print{button{display:none!important}}
+</style></head><body>
+
+<div style="margin-bottom:32px">
+  <div style="font-family:'DM Mono',monospace;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:#47ffb2;margin-bottom:12px">Niche Gap Analyzer · Competitive Landscape</div>
+  <h1>Landscape:<br/><em>${space}</em></h1>
+  <p class="meta">${date} · Competitors: ${competitors.join(", ")}</p>
+  <button onclick="window.print()" style="background:#47ffb2;color:#0a0a0b;border:none;cursor:pointer;padding:10px 20px;font-family:'DM Mono',monospace;font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;border-radius:4px">Save as PDF</button>
+</div>
+
+<div class="summary-box">
+  ${result.marketMaturity ? `<span class="tag" style="background:${result.marketMaturity === "EMERGING" ? "#47ffb2" : result.marketMaturity === "GROWING" ? "#e8ff47" : result.marketMaturity === "MATURE" ? "#ffab47" : "#ff4d4d"}">${result.marketMaturity}</span>` : ""}
+  <span class="tag" style="background:#47ffb2">${(result.competitors || []).length} Competitors Mapped</span>
+  <p class="summary-text" style="margin-top:12px">${result.landscapeSummary}</p>
+  ${result.recommendedPositioning ? `<div class="positioning"><span class="pos-label">Recommended Positioning</span><p class="pos-text">"${result.recommendedPositioning}"</p></div>` : ""}
+</div>
+
+<h2>Competitor Breakdown</h2>
+<div class="grid">${competitorCards}</div>
+
+<div class="two-col">
+  <section>
+    <h2>Shared Weaknesses</h2>
+    ${(result.sharedWeaknesses || []).map(w => `<div class="list-item"><span class="red">⚠</span>${w}</div>`).join("")}
+  </section>
+  <section style="border-color:#47ffb244">
+    <h2 style="color:#47ffb2">Whitespace Opportunity</h2>
+    <div class="whitespace-box"><p class="whitespace-text">"${result.whitespaceOpportunity}"</p></div>
+    ${result.priceGap && result.priceGap !== "None identified" ? `<div style="margin-top:14px;padding-top:14px;border-top:1px solid #47ffb222"><div style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:#47ffb2;margin-bottom:5px">Price Gap</div><p style="font-size:12px;color:#8888a0;line-height:1.5">${result.priceGap}</p></div>` : ""}
+  </section>
+</div>
+
+${result.winningAngle ? `<section><h2>Winning Angle</h2><p style="font-size:14px;line-height:1.7;color:#e2e2e8">${result.winningAngle}</p></section>` : ""}
+
+<div class="footer">
+  <span>SOURCES: App Store RSS · Reddit API · Claude Synthesis</span>
+  <span>niche-gap.vercel.app</span>
+</div>
+</body></html>`;
+
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+}
+
 // ── Competitive Landscape Panel ────────────────────────────────────────────
 function CompetitiveLandscapePanel({ onSave }) {
   const [space, setSpace] = useState("");
@@ -1454,6 +1599,22 @@ function CompetitiveLandscapePanel({ onSave }) {
               <p style={{ fontSize: 14, lineHeight: 1.7, color: C.text }}>{result.winningAngle}</p>
             </div>
           )}
+
+          {/* Export buttons */}
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
+            <button onClick={() => exportLandscapeMarkdown(space, competitors, result)}
+              style={{ background: "none", border: `1px solid ${C.borderLit}`, color: C.textDim, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 7, transition: "border-color .2s,color .2s" }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = accentLand; e.currentTarget.style.color = accentLand; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = C.borderLit; e.currentTarget.style.color = C.textDim; }}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              Markdown
+            </button>
+            <button onClick={() => exportLandscapeHTML(space, competitors, result)}
+              style={{ background: accentLand, border: `1px solid ${accentLand}`, color: C.bg, cursor: "pointer", padding: "8px 16px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 7 }}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 5l3 3 3-3M1 10h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              Export Report
+            </button>
+          </div>
         </div>
       )}
     </div>
