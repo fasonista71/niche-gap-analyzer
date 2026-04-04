@@ -719,23 +719,30 @@ const DISCOVERY_PATTERNS = [
 ];
 
 async function runDiscoverySweep(domain, onProgress) {
-  const subs = domain.subs.join("+");
+  const subs = domain.subs.slice(0, 5).join("+"); // cap subs to avoid URL length issues
 
-  // Fire Reddit searches in parallel -- pattern searches + query searches
+  // Helper: sequential fetch with delay to avoid Reddit rate limiting
+  const seqFetch = async (urls) => {
+    const results = [];
+    for (const url of urls) {
+      try {
+        const d = await redditFetch(url);
+        results.push((d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })));
+      } catch { results.push([]); }
+      await new Promise(r => setTimeout(r, 300)); // 300ms between requests
+    }
+    return results;
+  };
+
   onProgress("Scanning Reddit for pain signals…");
-  const patternSearches = DISCOVERY_PATTERNS.slice(0, 4).map(pattern =>
-    redditFetch(`https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(pattern)}&sort=relevance&limit=10&restrict_sr=true&t=year`)
-      .then(d => (d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })))
-      .catch(() => [])
+  const patternUrls = DISCOVERY_PATTERNS.slice(0, 3).map(pattern =>
+    `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(pattern)}&sort=relevance&limit=10&restrict_sr=true&t=year`
+  );
+  const queryUrls = domain.queries.slice(0, 2).map(q =>
+    `https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(q + " problem")}&sort=relevance&limit=8&restrict_sr=true&t=year`
   );
 
-  const querySearches = domain.queries.slice(0, 3).map(q =>
-    redditFetch(`https://www.reddit.com/r/${subs}/search.json?q=${encodeURIComponent(q + " problem")}&sort=relevance&limit=8&restrict_sr=true&t=year`)
-      .then(d => (d?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit })))
-      .catch(() => [])
-  );
-
-  const allResults = await Promise.all([...patternSearches, ...querySearches]);
+  const allResults = await seqFetch([...patternUrls, ...queryUrls]);
   const seen = new Set();
   const posts = allResults.flat()
     .filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; })
@@ -805,6 +812,50 @@ Respond JSON only, no markdown:
 Order by opportunityScore descending. Be specific — "sleep quality during pregnancy" beats "sleep tracking".`;
 
   return streamClaude(prompt, onChunk);
+}
+
+// ── Opportunity row -- must be a real component to use useState ────────────
+function OpportunityRow({ opp, index, total, onDiveDeep, accentDisc, scoreColor, demandColor, compColor }) {
+  const [sent, setSent] = useState(false);
+  return (
+    <div style={{
+      display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px",
+      gap: 0, padding: "16px 20px",
+      borderBottom: index < total - 1 ? `1px solid ${C.border}` : "none",
+    }}>
+      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, paddingTop: 2 }}>
+        {opp.opportunityScore}
+      </div>
+      <div style={{ paddingRight: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
+        <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
+        {opp.signalQuote && (
+          <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 90)}{opp.signalQuote.length > 90 ? "…" : ""}"</div>
+        )}
+      </div>
+      <div style={{ paddingTop: 2 }}>
+        <span style={{ display: "inline-block", fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 2, background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700 }}>{opp.type}</span>
+      </div>
+      <div style={{ paddingTop: 2 }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: demandColor(opp.demandStrength), fontWeight: 600 }}>{opp.demandStrength}</span>
+      </div>
+      <div style={{ paddingTop: 2 }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>{opp.competitionLevel}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-start", paddingTop: 1 }}>
+        {sent ? (
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.green, letterSpacing: "0.1em" }}>✓ Pre-filled B2C</span>
+        ) : (
+          <button onClick={() => { onDiveDeep(opp.niche); setSent(true); setTimeout(() => setSent(false), 3000); }}
+            style={{ background: `${accentDisc}15`, border: `1px solid ${accentDisc}44`, color: accentDisc, cursor: "pointer", padding: "4px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", whiteSpace: "nowrap" }}
+            onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}30`}
+            onMouseLeave={e => e.currentTarget.style.background = `${accentDisc}15`}>
+            Dive Deep →
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ── Discovery Panel ────────────────────────────────────────────────────────
@@ -898,61 +949,11 @@ function DiscoveryPanel({ onDiveDeep }) {
             </div>
 
             {/* Table rows */}
-            {result.opportunities.map((opp, i) => {
-              const [sent, setSent] = useState(false);
-              return (
-                <div key={i} style={{
-                  display: "grid", gridTemplateColumns: "48px 1fr 80px 90px 100px 130px",
-                  gap: 0, padding: "16px 20px",
-                  borderBottom: i < result.opportunities.length - 1 ? `1px solid ${C.border}` : "none",
-                }}>
-                  {/* Score */}
-                  <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, paddingTop: 2 }}>
-                    {opp.opportunityScore}
-                  </div>
-
-                  {/* Niche + verdict */}
-                  <div style={{ paddingRight: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 4 }}>{opp.niche}</div>
-                    <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.4 }}>{opp.verdict}</div>
-                    {opp.signalQuote && (
-                      <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, fontStyle: "italic" }}>"{opp.signalQuote.slice(0, 90)}{opp.signalQuote.length > 90 ? "…" : ""}"</div>
-                    )}
-                  </div>
-
-                  {/* Type */}
-                  <div style={{ paddingTop: 2 }}>
-                    <span style={{ display: "inline-block", fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", padding: "2px 7px", borderRadius: 2, background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700 }}>{opp.type}</span>
-                  </div>
-
-                  {/* Demand */}
-                  <div style={{ paddingTop: 2 }}>
-                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: demandColor(opp.demandStrength), fontWeight: 600 }}>{opp.demandStrength}</span>
-                  </div>
-
-                  {/* Competition */}
-                  <div style={{ paddingTop: 2 }}>
-                    <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: compColor(opp.competitionLevel), fontWeight: 600 }}>{opp.competitionLevel}</span>
-                  </div>
-
-                  {/* Dive deep button */}
-                  <div style={{ display: "flex", alignItems: "flex-start", paddingTop: 1 }}>
-                    {sent ? (
-                      <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.green, letterSpacing: "0.1em", display: "flex", alignItems: "center", gap: 5 }}>
-                        ✓ Pre-filled B2C
-                      </span>
-                    ) : (
-                      <button onClick={() => { onDiveDeep(opp.niche); setSent(true); setTimeout(() => setSent(false), 3000); }}
-                        style={{ background: `${accentDisc}15`, border: `1px solid ${accentDisc}44`, color: accentDisc, cursor: "pointer", padding: "4px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "background .2s", whiteSpace: "nowrap" }}
-                        onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}30`}
-                        onMouseLeave={e => e.currentTarget.style.background = `${accentDisc}15`}>
-                        Dive Deep →
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {result.opportunities.map((opp, i) => (
+              <OpportunityRow key={i} opp={opp} index={i} total={result.opportunities.length}
+                onDiveDeep={onDiveDeep} accentDisc={accentDisc}
+                scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
+            ))}
           </div>
 
           <p style={{ marginTop: 12, fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>
