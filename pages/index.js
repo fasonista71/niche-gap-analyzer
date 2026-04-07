@@ -296,7 +296,7 @@ async function fetchB2BReviewSignals(toolName) {
 }
 
 // ── Claude synthesis — B2C ─────────────────────────────────────────────────
-async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorData, onChunk) {
+async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorData, onChunk, priorDiscovery = null) {
   const redditSummary = redditPosts.slice(0, 10).map(p => `[r/${p.subreddit}] "${p.title}" — ${p.selftext?.slice(0, 200) || "no body"}`).join("\n");
   const demandSummary = demandPosts.slice(0, 10).map(p => `[${p.demandType === "seeking" ? "SEEKING" : "LAMENTING"} · r/${p.subreddit} · ↑${p.score}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 200)}` : ""}`).join("\n");
   const reviewSummary = appStoreData.reviews.filter(r => r.rating <= 2).slice(0, 10).map(r => `★${r.rating} "${r.title}": ${r.content?.slice(0, 200)}`).join("\n");
@@ -306,7 +306,9 @@ async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, comp
   const redditCount = (redditPosts?.length || 0) + (demandPosts?.length || 0);
   const signalHint = redditCount < 5 ? "SIGNAL HINT: Very few Reddit posts were found — this may be a professional/institutional niche where demand doesn't live on Reddit. Set signalConfidence to LOW and populate professionalNicheWarning." : redditCount < 12 ? "SIGNAL HINT: Reddit signal is thin. Consider MEDIUM confidence." : "SIGNAL HINT: Reddit signal is adequate.";
 
-  const prompt = `You are a sharp product strategist. Analyze B2C signals for: "${query}"\n\nAPP STORE (auto-detected): ${appInfo}\nLOW-RATED REVIEWS: ${reviewSummary || "None."}\n${competitorSection}\nREDDIT — GENERAL: ${redditSummary || "None."}\nREDDIT — RAW DEMAND: ${demandSummary || "None."}\n\n${signalHint}\n\nWeight RAW DEMAND most heavily. ${competitorData.length > 0 ? "For NAMED COMPETITORS: gaps ALL fail to solve = highest-value whitespace." : ""}\n\nScoring rubric — be decisive and use the full 0-100 range, not just 25/50/75:\n- demandScore: intensity AND volume of pain/seeking signals. 80+ = many loud voices. 40-60 = some signal but tepid. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. 40-60 = moderate competition with cracks. <30 = saturated with strong incumbents.\n- timingScore: is the trend accelerating or stagnant? 80+ = clearly accelerating demand. 50 = steady. <30 = shrinking or niche-of-a-niche.\n- opportunityScore: weighted composite roughly (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich Reddit + reviews, MEDIUM if limited, LOW if barely any organic signal found (likely professional niche).\n- professionalNicheWarning: string or null. If signal is LOW because the audience doesn't post on Reddit (CRNAs, surgeons, enterprise buyers, first responders, etc.), return a 1-sentence warning pointing to where demand actually lives (LinkedIn groups / professional associations / conference proceedings). Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline — the takeaway a founder would quote>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific>","redditInsight":"<most revealing>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<app>","rating":<n>,"topComplaint":"<complaint>","missingFeature":"<feature>","pricePoint":"<price>","weaknessScore":<0-100>}],"sharedWeakness":"<gap ALL fail to solve>","buildRecommendation":"<1-2 features>","warnings":["<r1>","<r2>"]}`;
+  const priorSection = priorDiscovery ? `\nPRIOR ZEITGEIST VERDICT (cold read, no live signal):\n- Score: ${priorDiscovery.opportunityScore ?? "n/a"}/100\n- Type: ${priorDiscovery.type || "n/a"}\n- Demand: ${priorDiscovery.demandStrength || "n/a"} · Competition: ${priorDiscovery.competitionLevel || "n/a"}\n- Trend driver: ${priorDiscovery.trendDriver || "n/a"}\n- Existing players: ${(priorDiscovery.existingSolutions || []).join(", ") || "n/a"}\n\nRECONCILIATION RULE: The Zeitgeist score was a cold read from training data. You now have LIVE Reddit + App Store signal. Your job is to ground-truth the prior. If live signal CONFIRMS the prior, your scores should be close to it. If live signal CONTRADICTS it (e.g. the prior said HIGH demand but Reddit shows crickets), you MUST lower your scores AND lead your verdict with the contradiction — e.g. "Despite apparent category interest, live demand signal is minimal…". Never silently flip a 65 to a 25 without saying why in the verdict. Name the delta explicitly.\n` : "";
+
+  const prompt = `You are a sharp product strategist. Analyze B2C signals for: "${query}"\n${priorSection}\nAPP STORE (auto-detected): ${appInfo}\nLOW-RATED REVIEWS: ${reviewSummary || "None."}\n${competitorSection}\nREDDIT — GENERAL: ${redditSummary || "None."}\nREDDIT — RAW DEMAND: ${demandSummary || "None."}\n\n${signalHint}\n\nWeight RAW DEMAND most heavily. ${competitorData.length > 0 ? "For NAMED COMPETITORS: gaps ALL fail to solve = highest-value whitespace." : ""}\n\nScoring rubric — be decisive and use the full 0-100 range, not just 25/50/75:\n- demandScore: intensity AND volume of pain/seeking signals. 80+ = many loud voices. 40-60 = some signal but tepid. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. 40-60 = moderate competition with cracks. <30 = saturated with strong incumbents.\n- timingScore: is the trend accelerating or stagnant? 80+ = clearly accelerating demand. 50 = steady. <30 = shrinking or niche-of-a-niche.\n- opportunityScore: weighted composite roughly (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich Reddit + reviews, MEDIUM if limited, LOW if barely any organic signal found (likely professional niche).\n- professionalNicheWarning: string or null. If signal is LOW because the audience doesn't post on Reddit (CRNAs, surgeons, enterprise buyers, first responders, etc.), return a 1-sentence warning pointing to where demand actually lives (LinkedIn groups / professional associations / conference proceedings). Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline — the takeaway a founder would quote>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific>","redditInsight":"<most revealing>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<app>","rating":<n>,"topComplaint":"<complaint>","missingFeature":"<feature>","pricePoint":"<price>","weaknessScore":<0-100>}],"sharedWeakness":"<gap ALL fail to solve>","buildRecommendation":"<1-2 features>","warnings":["<r1>","<r2>"]}`;
 
   return streamClaude(prompt, onChunk);
 }
@@ -710,12 +712,16 @@ const SAMPLE_B2C_RESULT = {
 function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
   const [showSample, setShowSample] = useState(false);
   const [query, setQuery] = useState("");
+  const [priorDiscovery, setPriorDiscovery] = useState(null);
   const runRef = useRef(null);
 
   // When Discovery passes a prefill, set it and auto-trigger analysis
   useEffect(() => {
     if (prefill) {
-      setQuery(prefill);
+      const niche = typeof prefill === "string" ? prefill : prefill.niche;
+      const prior = typeof prefill === "string" ? null : prefill.priorDiscovery;
+      setQuery(niche || "");
+      setPriorDiscovery(prior);
       // small delay so query state settles before run fires
       const t = setTimeout(() => { runRef.current?.(); }, 80);
       onPrefillConsumed?.();
@@ -751,7 +757,7 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
       setAppData(appStoreData.app);
       setPhase("synthesizing");
       setPhaseLabel("Synthesizing gap analysis…");
-      const analysis = await synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorResults, p => setStreamText(p));
+      const analysis = await synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorResults, p => setStreamText(p), priorDiscovery);
       if (analysis) { setResult(analysis); setHistory(h => [{ query, competitors: [...competitors], analysis }, ...h.slice(0, 4)]); setPhase("done"); }
       else setPhase("error");
     } catch (e) { console.error(e); setPhase("error"); }
@@ -760,13 +766,14 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
   const clear = () => {
     setQuery(""); setCompetitors([]); setSubreddits([]); setUseCustomOnly(false);
     setPhase("idle"); setResult(null); setStreamText(""); setAppData(null); setDemandCount(0);
+    setPriorDiscovery(null);
   };
 
   return (
     <div>
       {/* Query */}
       <div style={{ display: "flex", border: `1px solid ${busy ? C.accent : C.borderLit}`, borderRadius: 6, overflow: "hidden", transition: "border-color .3s", boxShadow: busy ? `0 0 0 3px ${C.accent}22` : "none", marginBottom: 12 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && run()}
+        <input value={query} onChange={e => { setQuery(e.target.value); if (priorDiscovery) setPriorDiscovery(null); }} onKeyDown={e => e.key === "Enter" && run()}
           placeholder="e.g. meditation, sleep tracking, freelance invoicing…"
           style={{ flex: 1, background: C.surface, border: "none", outline: "none", color: C.text, fontSize: 15, padding: "16px 20px", fontFamily: "'DM Sans', sans-serif" }}/>
         {(phase === "done" || phase === "error") && (
@@ -1044,11 +1051,13 @@ For each opportunity:
 - Focus on genuine gaps where demand is expressed but supply is fragmented, expensive, or poorly UX'd
 - Note which domain it belongs to
 
-Scoring rules:
-- 70+: Real gap, clear rising demand, weak/absent solutions
-- 45-69: Real demand, meaningful competition exists, differentiation is possible
-- Below 45: Saturated or demand too diffuse
-- Be conservative — false hope is worse than honest low scores
+Scoring rules (CRITICAL — calibrate carefully, this score will be cross-checked against live Reddit/App Store signal downstream, and large deltas are embarrassing):
+- 70+: RARE. Reserve for gaps where you can name the specific recent behavior shift AND confirm no major player has shipped a credible solution. If you're not sure, don't hit 70.
+- 45-69: Real category interest, but incumbents exist and differentiation is the whole game.
+- Below 45: Saturated, niche-of-a-niche, or demand likely lives outside discoverable channels (professional/institutional — flag these as LOW not MEDIUM).
+- DEFAULT TO SKEPTICISM. For every opportunity, ask: "If this were hot, would I already know the 3 apps chasing it?" If yes, score below 50.
+- A "HIGH demand" label means you could cite specific growing public discussion, not just a general cultural sense that something matters.
+- False hope is worse than honest low scores. A 25/100 verdict is a valid and useful result.
 
 Return JSON only, no markdown fences:
 
@@ -1088,7 +1097,12 @@ DOMAIN CONTEXT: ${domain.context}
 Rules:
 - Account for ALL existing solutions (apps, SaaS, AI tools, browser extensions). If Notion/Airtable/ChatGPT/etc covers it, score low.
 - Favor gaps that emerged or intensified in 2024-2025.
-- Be conservative: 70+ = real gap with weak solutions. 45-69 = real demand, beatable competition. <45 = saturated.
+- CALIBRATION: this score will be cross-checked against live Reddit/App Store signal. Large deltas are embarrassing. Default to skepticism.
+- 70+ RARE: you must be able to name the behavior shift AND confirm incumbents are weak. If unsure, don't hit 70.
+- 45-69: real demand, beatable competition, differentiation is the whole game.
+- <45: saturated, or demand lives outside discoverable channels (professional/institutional).
+- "HIGH demand" requires citeable public discussion, not a general cultural sense that it matters.
+- A 25/100 verdict is a valid and useful result. False hope is worse than honest low scores.
 
 Return JSON only, no markdown fences. The top-level object MUST have a single key "opportunities" whose value is an array of exactly 8 objects in this exact shape:
 
@@ -1156,7 +1170,7 @@ function OpportunityRow({ opp, index, total, onDiveDeep, onSave, accentDisc, sco
         {sent ? (
           <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.green, letterSpacing: "0.1em" }}>✓ Pre-filled B2C</span>
         ) : (
-          <button onClick={() => { onDiveDeep(opp.niche); setSent(true); setTimeout(() => setSent(false), 3000); }}
+          <button onClick={() => { onDiveDeep(opp); setSent(true); setTimeout(() => setSent(false), 3000); }}
             style={{ background: `${accentDisc}15`, border: `1px solid ${accentDisc}44`, color: accentDisc, cursor: "pointer", padding: "4px 10px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", whiteSpace: "nowrap" }}
             onMouseEnter={e => e.currentTarget.style.background = `${accentDisc}30`}
             onMouseLeave={e => e.currentTarget.style.background = `${accentDisc}15`}>
@@ -2196,7 +2210,12 @@ export default function Home() {
   const [b2cPrefill, setB2cPrefill] = useState(null);
   const [saved, setSaved] = useState([]); // [{ id, opp, source, savedAt, note }]
 
-  const handleDiveDeep = (niche) => { setB2cPrefill(niche); };
+  const handleDiveDeep = (oppOrNiche) => {
+    // Accept either a full opportunity object (from Zeitgeist/Discovery)
+    // or a bare niche string (from Saved panel legacy callers).
+    if (typeof oppOrNiche === "string") setB2cPrefill({ niche: oppOrNiche, priorDiscovery: null });
+    else setB2cPrefill({ niche: oppOrNiche?.niche || "", priorDiscovery: oppOrNiche || null });
+  };
 
   const handleSave = (opp, source) => {
     try {
