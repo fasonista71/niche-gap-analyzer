@@ -1687,7 +1687,7 @@ function CompetitiveLandscapePanel({ onSave }) {
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={run} disabled={!space.trim() || competitors.length < 2 || busy}
             style={{ background: space.trim() && competitors.length >= 2 && !busy ? accentLand : C.muted, color: C.bg, border: "none", cursor: space.trim() && competitors.length >= 2 && !busy ? "pointer" : "default", padding: "12px 28px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", transition: "background .2s" }}>
-            {busy ? <Pulse color={C.bg} /> : "Map the Landscape"}
+            {busy ? "Working…" : "Map the Landscape"}
           </button>
           {(phase === "done" || phase === "error") && (
             <button onClick={clear} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "12px 20px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "color .2s, border-color .2s" }}
