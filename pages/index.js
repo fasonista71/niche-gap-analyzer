@@ -1055,45 +1055,21 @@ Return exactly 10 opportunities ordered by opportunityScore descending. Be speci
 async function synthesizeDiscovery(domain, onChunk) {
   onChunk(`Scanning ${domain.label}…`);
 
-  const prompt = `You are a sharp product strategist with deep knowledge of the 2024-2025 app and SaaS landscape. Identify the most compelling unmet needs in the "${domain.label}" space.
+  // Tight, fast prompt — must complete inside Edge function streaming window (~25s on Hobby).
+  // Schema is deliberately compact: 8 opportunities, short fields, no fluff.
+  const prompt = `You are a sharp product strategist. Identify 8 compelling unmet needs in "${domain.label}" (${domain.context}).
 
-DOMAIN CONTEXT: ${domain.context}
+Rules:
+- Account for ALL existing solutions (apps, SaaS, AI tools, browser extensions). If Notion/Airtable/ChatGPT covers it, score low.
+- Favor gaps that emerged or intensified in 2024-2025.
+- Be conservative. 70+ = real gap with weak solutions. 45-69 = real demand, beatable competition. <45 = saturated.
 
-For each opportunity:
-- Consider ALL existing solutions: mobile apps, web apps, SaaS tools, desktop software, browser extensions, AI tools
-- Be brutally honest about competition — if Notion, Airtable, or any well-known tool covers it, say so
-- Focus on gaps that are genuinely underserved, not just "nobody built a pretty version of X"
-- Favor niches that have emerged or grown significantly in 2023-2025 (new behaviors, new pain points)
+JSON only, no markdown:
+{"opportunities":[{"niche":"<3-6 words>","domain":"${domain.label}","opportunityScore":<0-100>,"type":"<improve|whitespace>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","trendDriver":"<1 sentence>","knownTools":"<2-3 tools or 'None identified'>","verdict":"<1 punchy sentence>","signalQuote":"<paraphrased frustrated user>","buildAngle":"<1 sentence>"}]}
 
-Scoring rules:
-- 70+: Real gap, clear demand, weak or absent solutions
-- 45-69: Real demand but meaningful competition exists, differentiation is possible
-- Below 45: Saturated or demand too diffuse
-- Be conservative — it's better to score honestly low than give false hope
+Return exactly 8, ordered by opportunityScore desc.`;
 
-Return JSON only, no markdown fences:
-
-{
-  "opportunities": [
-    {
-      "niche": "<3-6 word specific niche>",
-      "domain": "${domain.label}",
-      "opportunityScore": <0-100>,
-      "type": "<improve|whitespace>",
-      "demandStrength": "<HIGH|MEDIUM|LOW>",
-      "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
-      "trendDriver": "<one sentence: what shift made this emerge now>",
-      "knownTools": "<2-4 existing tools or 'None identified'>",
-      "verdict": "<one honest punchy sentence>",
-      "signalQuote": "<realistic paraphrase of what frustrated users say>",
-      "buildAngle": "<one specific sentence on what to build and how to differentiate>"
-    }
-  ]
-}
-
-Return exactly 10 opportunities ordered by opportunityScore descending.`;
-
-  return streamClaude(prompt, onChunk);
+  return streamClaude(prompt, onChunk, 4000);
 }
 
 
@@ -1996,42 +1972,63 @@ function SavedPanel({ saved, onRemove, onNoteChange }) {
   );
 }
 
-// ── Zeitgeist Hero — persistent above-the-tabs entry point ────────────────
-function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
+// ── Zeitgeist Hero — single home for cross-domain scan + per-domain drill-in ──
+function ZeitgeistHero({ onDiveDeep, onSave }) {
+  // phase: "idle" | "synth-zeitgeist" | "synth-domain" | "done" | "error"
   const [phase, setPhase] = useState("idle");
-  const [result, setResult] = useState(null);
+  const [zeitgeistResult, setZeitgeistResult] = useState(null);
+  const [drillResult, setDrillResult] = useState(null);
+  const [drillDomain, setDrillDomain] = useState(null); // DOMAINS entry currently being drilled
   const [streamText, setStreamText] = useState("");
-  const [domainFilter, setDomainFilter] = useState(null);
+  const [errorDetail, setErrorDetail] = useState("");
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 5;
   const accentDisc = "#ff6bff";
 
-  const run = async () => {
-    if (phase === "synthesizing") return;
-    setResult(null); setStreamText(""); setDomainFilter(null); setPage(0);
-    setPhase("synthesizing");
+  const runZeitgeist = async () => {
+    if (phase === "synth-zeitgeist" || phase === "synth-domain") return;
+    setZeitgeistResult(null); setDrillResult(null); setDrillDomain(null);
+    setStreamText(""); setPage(0); setErrorDetail("");
+    setPhase("synth-zeitgeist");
     try {
       const analysis = await synthesizeZeitgeist(p => setStreamText(p));
-      if (analysis) { setResult(analysis); setPhase("done"); }
-      else setPhase("error");
-    } catch (e) { console.error(e); setPhase("error"); }
+      if (analysis) { setZeitgeistResult(analysis); setPhase("done"); }
+      else { setErrorDetail("Claude returned null."); setPhase("error"); }
+    } catch (e) { console.error(e); setErrorDetail(e?.message || String(e)); setPhase("error"); }
   };
 
-  const busy = phase === "synthesizing";
+  const drillIntoDomain = async (domainLabel) => {
+    const domain = DOMAINS.find(d => d.label === domainLabel);
+    if (!domain || phase === "synth-domain" || phase === "synth-zeitgeist") return;
+    setDrillDomain(domain); setDrillResult(null); setStreamText(""); setPage(0); setErrorDetail("");
+    setPhase("synth-domain");
+    try {
+      const analysis = await synthesizeDiscovery(domain, p => setStreamText(p));
+      if (analysis) { setDrillResult(analysis); setPhase("done"); }
+      else { setErrorDetail("Claude returned null."); setPhase("error"); }
+    } catch (e) { console.error(e); setErrorDetail(e?.message || String(e)); setPhase("error"); }
+  };
+
+  const backToZeitgeist = () => {
+    setDrillResult(null); setDrillDomain(null); setPage(0); setPhase("done");
+  };
+
+  const busy = phase === "synth-zeitgeist" || phase === "synth-domain";
   const scoreColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
   const demandColor = d => d === "HIGH" ? C.green : d === "MEDIUM" ? C.orange : C.red;
   const compColor = c => c === "ABSENT" || c === "THIN" ? C.green : c === "MODERATE" ? C.orange : C.red;
 
-  const allOpps = result?.opportunities || [];
-  const filteredOpps = domainFilter ? allOpps.filter(o => o.domain === domainFilter) : allOpps;
-  const totalPages = Math.ceil(filteredOpps.length / PAGE_SIZE);
-  const pageOpps = filteredOpps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  const domainCounts = allOpps.reduce((acc, o) => { acc[o.domain] = (acc[o.domain] || 0) + 1; return acc; }, {});
+  // Decide what to display: drill results take priority, otherwise zeitgeist
+  const showingDrill = !!(drillDomain && drillResult);
+  const allOpps = showingDrill ? (drillResult?.opportunities || []) : (zeitgeistResult?.opportunities || []);
+  const totalPages = Math.ceil(allOpps.length / PAGE_SIZE);
+  const pageOpps = allOpps.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const domainCounts = (zeitgeistResult?.opportunities || []).reduce((acc, o) => { acc[o.domain] = (acc[o.domain] || 0) + 1; return acc; }, {});
 
   return (
     <div style={{ marginBottom: 32 }}>
       {/* The main CTA button */}
-      <button onClick={() => !busy && run()} disabled={busy}
+      <button onClick={() => !busy && runZeitgeist()} disabled={busy}
         style={{
           width: "100%", padding: "20px 28px",
           background: busy ? `${accentDisc}12` : `${accentDisc}08`,
@@ -2046,10 +2043,10 @@ function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
             <span style={{ fontSize: 24 }}>✨</span>
             <div style={{ textAlign: "left" }}>
               <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc, marginBottom: 3 }}>
-                Scan the Zeitgeist
+                {phase === "synth-zeitgeist" ? "Scanning the Zeitgeist…" : phase === "synth-domain" ? `Drilling into ${drillDomain?.label}…` : "Scan the Zeitgeist"}
               </div>
               <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
-                What does the market want right now that nobody's built? · Cross-domain · AI-powered
+                Cross-domain market scan · click any category below to drill deeper
               </div>
             </div>
           </div>
@@ -2060,30 +2057,55 @@ function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
       </button>
 
       {/* Streaming preview */}
-      {phase === "synthesizing" && streamText && (
+      {busy && streamText && (
         <div style={{ marginTop: 8, padding: "12px 16px", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, lineHeight: 1.7, maxHeight: 80, overflow: "hidden", maskImage: "linear-gradient(to bottom,black 50%,transparent)" }}>{streamText.slice(-300)}</div>
+      )}
+
+      {/* Error */}
+      {phase === "error" && (
+        <div style={{ marginTop: 12, padding: "14px 18px", border: `1px solid ${C.red}44`, background: `${C.red}11`, borderRadius: 6 }}>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.red, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 4 }}>Scan failed</div>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.textDim, marginBottom: 8 }}>{errorDetail || "Unknown error"}</div>
+          <button onClick={drillDomain ? () => drillIntoDomain(drillDomain.label) : runZeitgeist} style={{ background: "none", border: `1px solid ${C.red}66`, color: C.red, cursor: "pointer", padding: "4px 12px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+            ↻ Retry
+          </button>
+        </div>
       )}
 
       {/* Results */}
       {phase === "done" && allOpps.length > 0 && (
         <div style={{ marginTop: 12, animation: "fadeUp .4s ease both" }}>
-          {/* Filter chips */}
-          {Object.keys(domainCounts).length > 1 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-              <button onClick={() => { setDomainFilter(null); setPage(0); }}
-                style={{ background: !domainFilter ? accentDisc : C.surface, color: !domainFilter ? C.bg : C.textDim, border: `1px solid ${!domainFilter ? accentDisc : C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                All {allOpps.length}
+          {/* Drill-in header */}
+          {showingDrill && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "10px 14px", background: `${accentDisc}10`, border: `1px solid ${accentDisc}33`, borderRadius: 6 }}>
+              <button onClick={backToZeitgeist} style={{ background: "none", border: `1px solid ${accentDisc}55`, color: accentDisc, cursor: "pointer", padding: "3px 10px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                ← Back to Zeitgeist
               </button>
-              {Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).map(([domain, count]) => {
-                const d = DOMAINS.find(x => x.label === domain);
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                {drillDomain?.emoji} Deep dive · {drillDomain?.label} · {allOpps.length} opportunities
+              </span>
+              <button onClick={() => drillIntoDomain(drillDomain.label)} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                ↻ Rescan
+              </button>
+            </div>
+          )}
+
+          {/* Domain drill-in chips (only on zeitgeist view) */}
+          {!showingDrill && Object.keys(domainCounts).length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase", marginRight: 4 }}>Drill into:</span>
+              {Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).map(([domainLabel, count]) => {
+                const d = DOMAINS.find(x => x.label === domainLabel);
                 return (
-                  <button key={domain} onClick={() => { setDomainFilter(domain); setPage(0); }}
-                    style={{ background: domainFilter === domain ? `${accentDisc}22` : C.surface, color: domainFilter === domain ? accentDisc : C.textDim, border: `1px solid ${domainFilter === domain ? accentDisc + "55" : C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                    {d?.emoji} {domain.split(" ")[0]} {count}
+                  <button key={domainLabel} onClick={() => drillIntoDomain(domainLabel)} title={`Run a deep scan of ${domainLabel}`}
+                    style={{ background: C.surface, color: C.textDim, border: `1px solid ${C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "border-color .2s,color .2s" }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.color = accentDisc; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textDim; }}>
+                    {d?.emoji} {domainLabel.split(" ")[0]} {count} →
                   </button>
                 );
               })}
-              <button onClick={run} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", marginLeft: "auto" }}>
+              <button onClick={runZeitgeist} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", marginLeft: "auto" }}>
                 ↻ Rescan
               </button>
             </div>
@@ -2097,7 +2119,7 @@ function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
               ))}
             </div>
             {pageOpps.map((opp, i) => (
-              <OpportunityRow key={`hero-${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
+              <OpportunityRow key={`hero-${showingDrill ? "drill" : "z"}-${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
                 onDiveDeep={onDiveDeep} onSave={onSave} accentDisc={accentDisc}
                 scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
             ))}
@@ -2116,7 +2138,7 @@ function ZeitgeistHero({ onDiveDeep, onSave, onGoDiscover }) {
               ))}
               <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page === totalPages - 1}
                 style={{ background: C.surface, border: `1px solid ${C.border}`, color: page === totalPages - 1 ? C.muted : C.text, cursor: page === totalPages - 1 ? "default" : "pointer", padding: "5px 12px", borderRadius: 4, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700 }}>→</button>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, marginLeft: 4 }}>{filteredOpps.length} results</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, marginLeft: 4 }}>{allOpps.length} results</span>
             </div>
           )}
         </div>
@@ -2173,7 +2195,7 @@ export default function Home() {
 
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }}/>
-        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
+        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
 
         <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
 
@@ -2187,10 +2209,10 @@ export default function Home() {
                   <path d="M7 4v6M4 7h6" stroke={C.bg} strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
               </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
             </div>
             <h1 style={{ fontFamily: "'Instrument Serif', serif", fontSize: "clamp(32px,5vw,52px)", fontWeight: 400, lineHeight: 1.1, marginBottom: 12 }}>
-              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "discover" ? "#ff6bff" : activeTab === "saved" ? "#ffd166" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
+              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
             <p style={{ color: C.textDim, fontSize: 15, maxWidth: 520, lineHeight: 1.6 }}>
               Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis. Start with the Zeitgeist scan or validate a specific niche.
@@ -2201,13 +2223,12 @@ export default function Home() {
           {activeTab === "saved" ? (
             <SavedStatsPanel saved={saved} onExport={() => exportSavedMarkdown(saved)} onDiveDeep={(niche) => { handleDiveDeep(niche); setActiveTab("b2c"); }} onClearAll={() => { if (window.confirm("Clear all saved opportunities?")) setSaved([]); }} />
           ) : (
-            <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} onGoDiscover={() => setActiveTab("discover")} />
+            <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} />
           )}
 
           {/* Tabs */}
           <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
             {[
-              { key: "discover", label: "Discovery",             accent: "#ff6bff",    sub: "Zeitgeist · domain deep-dive" },
               { key: "b2c",      label: "B2C — Consumer Apps",  accent: C.accent,     sub: "App Store · consumer Reddit" },
               { key: "b2b",      label: "B2B — SaaS & Tools",   accent: C.accentB2B,  sub: "Professional communities · enterprise" },
               { key: "saved",    label: "Saved",                 accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
@@ -2235,9 +2256,6 @@ export default function Home() {
           </div>
           <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
             <B2BPanel onSave={handleSave} />
-          </div>
-          <div style={{ display: activeTab === "discover" ? "block" : "none" }}>
-            <DiscoveryPanel onDiveDeep={handleDiveDeep} onSave={handleSave} />
           </div>
           <div style={{ display: activeTab === "saved" ? "block" : "none" }}>
             <SavedPanel saved={saved} onRemove={handleRemove} onNoteChange={handleNoteChange} />
