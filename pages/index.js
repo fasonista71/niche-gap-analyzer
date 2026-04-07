@@ -202,24 +202,44 @@ async function fetchRedditDemandSignals(query, customSubs = [], useCustomOnly = 
 
 async function fetchAppStoreSignals(query) {
   try {
-    const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=software&limit=1&country=us`)).json();
-    const app = s?.results?.[0];
+    const { app, country } = await itunesSearchMulti(query);
     if (!app) return { app: null, reviews: [] };
-    const rv = await (await fetch(`https://itunes.apple.com/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`)).json();
-    const reviews = (rv?.feed?.entry || []).slice(1).map(e => ({ title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") }));
-    return { app: { name: app.trackName, developer: app.artistName, rating: app.averageUserRating, reviews: app.userRatingCount, category: app.primaryGenreName, icon: app.artworkUrl60 }, reviews };
+    let reviews = [];
+    try {
+      const rv = await (await fetch(`https://itunes.apple.com/${country}/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`)).json();
+      reviews = (rv?.feed?.entry || []).slice(1).map(e => ({ title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") }));
+    } catch {}
+    return { app: { name: app.trackName, developer: app.artistName, rating: app.averageUserRating, reviews: app.userRatingCount, category: app.primaryGenreName, icon: app.artworkUrl60, storefront: country }, reviews };
   } catch { return { app: null, reviews: [] }; }
+}
+
+// Search for an app across multiple iTunes storefronts. Small indie apps
+// often launch in a single region (e.g. Singapore, UK) before going global —
+// a US-only lookup misses them entirely. We walk a short list of major
+// English-language storefronts and take the first non-empty hit.
+async function itunesSearchMulti(term) {
+  const storefronts = ["us", "gb", "ca", "au", "sg", "ie", "nz"];
+  for (const country of storefronts) {
+    try {
+      const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=software&limit=3&country=${country}`)).json();
+      const hit = s?.results?.[0];
+      if (hit) return { app: hit, country };
+    } catch {}
+  }
+  return { app: null, country: null };
 }
 
 async function fetchCompetitorData(appName) {
   try {
-    const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(appName)}&entity=software&limit=1&country=us`)).json();
-    const app = s?.results?.[0];
+    const { app, country } = await itunesSearchMulti(appName);
     let appInfo = null, lowReviews = [];
     if (app) {
-      const rv = await (await fetch(`https://itunes.apple.com/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`)).json();
-      lowReviews = (rv?.feed?.entry || []).slice(1).map(e => ({ title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") })).filter(r => r.rating <= 2).slice(0, 6);
-      appInfo = { name: app.trackName, developer: app.artistName, rating: app.averageUserRating, reviewCount: app.userRatingCount, category: app.primaryGenreName, icon: app.artworkUrl60, price: app.formattedPrice };
+      // Pull reviews from the same storefront where we found the app.
+      try {
+        const rv = await (await fetch(`https://itunes.apple.com/${country}/rss/customerreviews/page=1/id=${app.trackId}/sortby=mostrecent/json`)).json();
+        lowReviews = (rv?.feed?.entry || []).slice(1).map(e => ({ title: e.title?.label || "", content: e.content?.label || "", rating: parseInt(e["im:rating"]?.label || "3") })).filter(r => r.rating <= 2).slice(0, 6);
+      } catch {}
+      appInfo = { name: app.trackName, developer: app.artistName, rating: app.averageUserRating, reviewCount: app.userRatingCount, category: app.primaryGenreName, icon: app.artworkUrl60, price: app.formattedPrice, storefront: country };
     }
     const rd = await redditFetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(appName + " app")}&sort=relevance&limit=10&t=year`);
     const mentions = (rd?.data?.children || []).slice(0, 5).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 200), score: p.data.score, subreddit: p.data.subreddit }));
@@ -254,7 +274,12 @@ ${competitorList}
 COMPETITOR DATA:
 ${competitorSection}
 
-CRITICAL OUTPUT RULE: The "competitors" array in your response MUST contain exactly ${competitors.length} entries, one per user-specified competitor, in the same order. If an entry has no App Store data, still include it — use Reddit mentions and general knowledge, set dataConfidence="LOW", set rating and reviewCount to null, and be honest about the sparse signal in strengthSummary (e.g. "Limited public data — appears to be a new/niche entrant positioned around X"). NEVER drop a competitor just because App Store data is missing.
+CRITICAL OUTPUT RULE: The "competitors" array in your response MUST contain exactly ${competitors.length} entries, one per user-specified competitor, in the same order. This rule has NO exceptions:
+
+- If an entry has NO App Store data → still include it. Use Reddit mentions + general knowledge, set dataConfidence="LOW", set rating and reviewCount to null, be honest about the sparse signal in strengthSummary.
+- If an entry has THIN App Store data (e.g. a new indie app with <20 reviews and no low-rated reviews) → still include it. Use the available metadata (rating, category, price, developer), the app name itself as a positioning cue, and any Reddit mentions. Set dataConfidence="MEDIUM" or "LOW" depending on how much you had to infer. topComplaints can be an empty array if you genuinely have nothing — do not fabricate complaints. strengthSummary should acknowledge the stage ("new entrant in the space, limited public signal yet — appears positioned around X based on name and category").
+- A competitor with high ratings and few reviews is NOT a failure to analyze — it's often a signal the product is new or niche. Report that honestly.
+- NEVER drop a user-specified competitor. NEVER merge two into one. NEVER substitute with a different app.
 
 For competitors with rich data, extract real signal from reviews and Reddit. Then identify shared whitespace — what ALL of them fail to do well.
 
