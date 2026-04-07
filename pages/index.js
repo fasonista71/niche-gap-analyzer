@@ -344,12 +344,34 @@ async function streamClaude(prompt, onChunk, maxTokens = 5000) {
   let fullText = "";
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  let buffer = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    for (const line of decoder.decode(value).split("\n").filter(l => l.startsWith("data: "))) {
-      try { const j = JSON.parse(line.slice(6)); if (j.type === "content_block_delta") { fullText += j.delta?.text || ""; onChunk(fullText); } } catch {}
+    // Stream-safe decode + line buffering. SSE events can split across reads,
+    // so we keep the trailing partial line in `buffer` until a newline arrives.
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || ""; // last element is the (possibly incomplete) trailing line
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      try {
+        const j = JSON.parse(payload);
+        if (j.type === "content_block_delta") {
+          fullText += j.delta?.text || "";
+          onChunk(fullText);
+        }
+      } catch {}
     }
+  }
+  // Flush any final buffered line
+  if (buffer.startsWith("data: ")) {
+    try {
+      const j = JSON.parse(buffer.slice(6));
+      if (j.type === "content_block_delta") fullText += j.delta?.text || "";
+    } catch {}
   }
   // Strip code fences if present
   let cleaned = fullText.replace(/```json|```/g, "").trim();
