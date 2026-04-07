@@ -230,9 +230,13 @@ async function fetchCompetitorData(appName) {
 // ── Competitive Landscape Map — deep side-by-side analysis ────────────────
 async function synthesizeCompetitiveLandscape(space, competitors, competitorData, onChunk) {
   const competitorSection = competitorData.map(c => {
-    if (!c.appInfo) return `${c.appName}: Not found on App Store.`;
+    const mentions = c.mentions.map(m => `  [r/${m.subreddit} ↑${m.score}] "${m.title}"${m.selftext ? ` — ${m.selftext.slice(0, 150)}` : ""}`).join("\n") || "  No Reddit mentions.";
+    if (!c.appInfo) {
+      return `${c.appName} [APP STORE: NOT FOUND — likely a new/niche/web-only product]
+  Reddit mentions:\n${mentions}
+  NOTE: No App Store data available. Characterize this entry using Reddit mentions above + your general knowledge of the space + any positioning cues in the name itself. Mark dataConfidence="LOW" for this competitor. DO NOT omit it from the output — the user explicitly added it to the comparison.`;
+    }
     const reviews = c.lowReviews.map(r => `  ★${r.rating} "${r.title}": ${r.content?.slice(0,150)}`).join("\n") || "  No low-rated reviews.";
-    const mentions = c.mentions.map(m => `  [r/${m.subreddit} ↑${m.score}] "${m.title}"`).join("\n") || "  No Reddit mentions.";
     return `${c.appInfo.name} by ${c.appInfo.developer}
   Rating: ★${c.appInfo.rating?.toFixed(1)} from ${c.appInfo.reviewCount?.toLocaleString()} reviews
   Price: ${c.appInfo.price || "Free"} · Category: ${c.appInfo.category}
@@ -240,12 +244,19 @@ async function synthesizeCompetitiveLandscape(space, competitors, competitorData
   Reddit mentions:\n${mentions}`;
   }).join("\n\n");
 
+  const competitorList = competitors.map((c, i) => `${i + 1}. ${c}`).join("\n");
+
   const prompt = `You are a sharp product strategist building a competitive landscape map for the "${space}" space.
+
+USER-SPECIFIED COMPETITORS (${competitors.length} total — ALL must appear in output):
+${competitorList}
 
 COMPETITOR DATA:
 ${competitorSection}
 
-Produce a thorough competitive landscape analysis. For each competitor extract real signal from the review and Reddit data. Then identify the shared whitespace — what ALL of them fail to do well.
+CRITICAL OUTPUT RULE: The "competitors" array in your response MUST contain exactly ${competitors.length} entries, one per user-specified competitor, in the same order. If an entry has no App Store data, still include it — use Reddit mentions and general knowledge, set dataConfidence="LOW", set rating and reviewCount to null, and be honest about the sparse signal in strengthSummary (e.g. "Limited public data — appears to be a new/niche entrant positioned around X"). NEVER drop a competitor just because App Store data is missing.
+
+For competitors with rich data, extract real signal from reviews and Reddit. Then identify shared whitespace — what ALL of them fail to do well.
 
 Respond JSON only, no markdown:
 
@@ -255,13 +266,14 @@ Respond JSON only, no markdown:
   "competitors": [
     {
       "name": "<app name>",
-      "rating": <number>,
-      "reviewCount": <number>,
-      "price": "<price or Free>",
-      "strengthSummary": "<what they do genuinely well — be specific>",
+      "rating": <number or null>,
+      "reviewCount": <number or null>,
+      "price": "<price, Free, or Unknown>",
+      "dataConfidence": "<HIGH|MEDIUM|LOW>",
+      "strengthSummary": "<what they do genuinely well — be specific. If data is sparse, be explicit about it.>",
       "topComplaints": ["<complaint 1>", "<complaint 2>", "<complaint 3>"],
       "missingFeatures": ["<feature 1>", "<feature 2>"],
-      "userSentiment": "<POSITIVE|MIXED|NEGATIVE>",
+      "userSentiment": "<POSITIVE|MIXED|NEGATIVE|UNKNOWN>",
       "vulnerabilityScore": <0-100>,
       "targetUser": "<who this app is really built for>"
     }
@@ -1591,8 +1603,10 @@ function CompetitiveLandscapePanel({ onSave }) {
   const busy = phase === "fetching" || phase === "synthesizing";
 
   const vulnColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
-  const sentColor = s => s === "POSITIVE" ? C.green : s === "NEGATIVE" ? C.red : C.orange;
+  const sentColor = s => s === "POSITIVE" ? C.green : s === "NEGATIVE" ? C.red : s === "UNKNOWN" ? C.muted : C.orange;
   const maturityColor = m => m === "EMERGING" ? C.green : m === "GROWING" ? C.accent : m === "MATURE" ? C.orange : C.red;
+  // Competitors the model flagged as having sparse data (no App Store match, reasoned from Reddit + general knowledge).
+  const sparseCompetitors = (result?.competitors || []).filter(c => c.dataConfidence === "LOW").map(c => c.name);
 
   return (
     <div style={{ marginTop: 48, paddingTop: 40, borderTop: `1px solid ${C.border}` }}>
@@ -1703,6 +1717,16 @@ function CompetitiveLandscapePanel({ onSave }) {
             )}
           </div>
 
+          {/* Sparse-data notice */}
+          {sparseCompetitors.length > 0 && (
+            <div style={{ padding: "10px 14px", background: `${C.orange}0d`, border: `1px solid ${C.orange}44`, borderRadius: 5, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.orange }}>⚠</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.6 }}>
+                <strong style={{ color: C.orange, letterSpacing: "0.05em" }}>{sparseCompetitors.join(", ")}</strong> {sparseCompetitors.length > 1 ? "were" : "was"} not found on the App Store. {sparseCompetitors.length > 1 ? "They were" : "It was"} characterized from Reddit mentions + general knowledge. For richer analysis, try the exact App Store name.
+              </span>
+            </div>
+          )}
+
           {/* Competitor cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12, marginBottom: 16 }}>
             {result.competitors?.map((c, i) => (
@@ -1710,8 +1734,19 @@ function CompetitiveLandscapePanel({ onSave }) {
                 {/* Card header */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 3 }}>{c.name}</div>
-                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>{c.price} · ★{c.rating?.toFixed(1)} · {c.reviewCount?.toLocaleString()} reviews</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{c.name}</div>
+                      {c.dataConfidence === "LOW" && (
+                        <span title="No App Store data found — characterized from Reddit mentions + general knowledge" style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, letterSpacing: "0.1em", textTransform: "uppercase", color: C.muted, border: `1px solid ${C.border}`, padding: "1px 5px", borderRadius: 2 }}>
+                          low data
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
+                      {c.price || "Unknown"}
+                      {typeof c.rating === "number" ? ` · ★${c.rating.toFixed(1)}` : ""}
+                      {typeof c.reviewCount === "number" ? ` · ${c.reviewCount.toLocaleString()} reviews` : c.dataConfidence === "LOW" ? " · no public reviews" : ""}
+                    </div>
                   </div>
                   <div style={{ textAlign: "right" }}>
                     <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: vulnColor(c.vulnerabilityScore), lineHeight: 1 }}>{c.vulnerabilityScore}</div>
