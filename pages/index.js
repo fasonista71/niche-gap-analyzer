@@ -351,27 +351,29 @@ async function streamClaude(prompt, onChunk, maxTokens = 5000) {
       try { const j = JSON.parse(line.slice(6)); if (j.type === "content_block_delta") { fullText += j.delta?.text || ""; onChunk(fullText); } } catch {}
     }
   }
+  // Strip code fences if present
+  let cleaned = fullText.replace(/```json|```/g, "").trim();
+
+  // Quick path: try parsing as-is
   try {
-    return JSON.parse(fullText.replace(/```json|```/g, "").trim());
-  } catch (e) {
-    // Attempt to salvage truncated JSON by closing open structures
-    let text = fullText.replace(/```json|```/g, "").trim();
-    // Close any unterminated string, array, object
-    const openBraces = (text.match(/\{/g) || []).length - (text.match(/\}/g) || []).length;
-    const openBrackets = (text.match(/\[/g) || []).length - (text.match(/\]/g) || []).length;
+    return JSON.parse(cleaned);
+  } catch (firstErr) {
+    // Salvage path: if the response was truncated mid-array, try to close it cleanly.
+    // Strategy: walk back to the last `},` (end of a complete object inside an array),
+    // then close all unbalanced `[` and `{` in order.
+    const openBraces = (cleaned.match(/\{/g) || []).length - (cleaned.match(/\}/g) || []).length;
+    const openBrackets = (cleaned.match(/\[/g) || []).length - (cleaned.match(/\]/g) || []).length;
     if (openBraces > 0 || openBrackets > 0) {
-      // Trim to last complete object (find last complete closing brace before truncation)
-      const lastGoodBrace = text.lastIndexOf("},");
+      const lastGoodBrace = cleaned.lastIndexOf("},");
       if (lastGoodBrace > 0) {
-        text = text.slice(0, lastGoodBrace + 1) + "]" + "}".repeat(openBraces);
+        const truncated = cleaned.slice(0, lastGoodBrace + 1) + "]".repeat(Math.max(0, openBrackets)) + "}".repeat(Math.max(0, openBraces));
+        try { return JSON.parse(truncated); } catch {}
       }
     }
-    try {
-      return JSON.parse(text);
-    } catch {
-      console.error("JSON parse failed after recovery attempt. Raw:", fullText.slice(0, 500));
-      throw new Error(`JSON parse failed: ${e.message}. Got: ${fullText.slice(0, 100)}`);
-    }
+    // Give the user (and console) something actually debuggable.
+    console.error("[streamClaude] JSON parse failed.\n  error:", firstErr.message, "\n  length:", fullText.length, "\n  head:", fullText.slice(0, 300), "\n  tail:", fullText.slice(-300));
+    const head = cleaned.slice(0, 240).replace(/\s+/g, " ");
+    throw new Error(`JSON parse failed: ${firstErr.message}\n\nResponse head: ${head}${cleaned.length > 240 ? "…" : ""}\n\n(Full response logged to browser console.)`);
   }
 }
 
@@ -1055,21 +1057,40 @@ Return exactly 10 opportunities ordered by opportunityScore descending. Be speci
 async function synthesizeDiscovery(domain, onChunk) {
   onChunk(`Scanning ${domain.label}…`);
 
-  // Tight, fast prompt — must complete inside Edge function streaming window (~25s on Hobby).
-  // Schema is deliberately compact: 8 opportunities, short fields, no fluff.
-  const prompt = `You are a sharp product strategist. Identify 8 compelling unmet needs in "${domain.label}" (${domain.context}).
+  // Tight prompt — must complete inside Edge function streaming window (~25s on Hobby).
+  // Schema kept multi-line and explicit so the model doesn't drop the wrapper array.
+  const prompt = `You are a sharp product strategist. Identify 8 compelling unmet needs in the "${domain.label}" space.
+
+DOMAIN CONTEXT: ${domain.context}
 
 Rules:
-- Account for ALL existing solutions (apps, SaaS, AI tools, browser extensions). If Notion/Airtable/ChatGPT covers it, score low.
+- Account for ALL existing solutions (apps, SaaS, AI tools, browser extensions). If Notion/Airtable/ChatGPT/etc covers it, score low.
 - Favor gaps that emerged or intensified in 2024-2025.
-- Be conservative. 70+ = real gap with weak solutions. 45-69 = real demand, beatable competition. <45 = saturated.
+- Be conservative: 70+ = real gap with weak solutions. 45-69 = real demand, beatable competition. <45 = saturated.
 
-JSON only, no markdown:
-{"opportunities":[{"niche":"<3-6 words>","domain":"${domain.label}","opportunityScore":<0-100>,"type":"<improve|whitespace>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","trendDriver":"<1 sentence>","knownTools":"<2-3 tools or 'None identified'>","verdict":"<1 punchy sentence>","signalQuote":"<paraphrased frustrated user>","buildAngle":"<1 sentence>"}]}
+Return JSON only, no markdown fences. The top-level object MUST have a single key "opportunities" whose value is an array of exactly 8 objects in this exact shape:
 
-Return exactly 8, ordered by opportunityScore desc.`;
+{
+  "opportunities": [
+    {
+      "niche": "<3-6 word specific niche>",
+      "domain": "${domain.label}",
+      "opportunityScore": <0-100>,
+      "type": "<improve|whitespace>",
+      "demandStrength": "<HIGH|MEDIUM|LOW>",
+      "competitionLevel": "<SATURATED|MODERATE|THIN|ABSENT>",
+      "trendDriver": "<one sentence: what shift made this emerge now>",
+      "knownTools": "<2-3 existing tools or 'None identified'>",
+      "verdict": "<one honest punchy sentence>",
+      "signalQuote": "<paraphrased frustrated user quote>",
+      "buildAngle": "<one specific sentence on what to build>"
+    }
+  ]
+}
 
-  return streamClaude(prompt, onChunk, 4000);
+Order by opportunityScore descending. Return exactly 8.`;
+
+  return streamClaude(prompt, onChunk, 4500);
 }
 
 
