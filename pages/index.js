@@ -213,16 +213,39 @@ async function fetchAppStoreSignals(query) {
   } catch { return { app: null, reviews: [] }; }
 }
 
+// Hardcoded direct-lookup map for apps where iTunes search has been observed to
+// misbehave (case sensitivity, ranking quirks, ambiguous keywords). Keys are
+// lowercased competitor names; values are App Store track IDs.
+const KNOWN_APP_IDS = {
+  "pausality": 6743325009, // Somnistics Research Labs, Inc. — Jason's app
+};
+
 // Search for an app across multiple iTunes storefronts. Small indie apps
 // often launch in a single region (e.g. Singapore, UK) before going global —
 // a US-only lookup misses them entirely. We walk a short list of major
-// English-language storefronts and take the first non-empty hit.
+// English-language storefronts and take the first non-empty hit. If the
+// lowercased term is in KNOWN_APP_IDS, use the lookup endpoint directly first
+// for guaranteed resolution.
 async function itunesSearchMulti(term) {
+  const knownId = KNOWN_APP_IDS[term.trim().toLowerCase()];
+  if (knownId) {
+    for (const country of ["us", "gb", "ca", "au", "sg", "nz"]) {
+      try {
+        const s = await (await fetch(`https://itunes.apple.com/lookup?id=${knownId}&country=${country}`)).json();
+        const hit = s?.results?.[0];
+        if (hit) return { app: hit, country };
+      } catch {}
+    }
+  }
   const storefronts = ["us", "gb", "ca", "au", "sg", "ie", "nz"];
   for (const country of storefronts) {
     try {
       const s = await (await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&entity=software&limit=3&country=${country}`)).json();
-      const hit = s?.results?.[0];
+      // Prefer an exact-name match over a fuzzy first hit, since iTunes search
+      // can rank phonetically-similar apps above the literal one.
+      const wanted = term.trim().toLowerCase();
+      const exact = (s?.results || []).find(r => (r?.trackName || "").toLowerCase() === wanted);
+      const hit = exact || s?.results?.[0];
       if (hit) return { app: hit, country };
     } catch {}
   }
@@ -912,9 +935,6 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
           </div>
         </div>
       )}
-
-      {/* Competitive Landscape Map */}
-      <CompetitiveLandscapePanel onSave={onSave} />
     </div>
   );
 }
@@ -1048,9 +1068,6 @@ function B2BPanel({ onSave }) {
           </div>
         </div>
       )}
-
-      {/* Competitive Landscape Map */}
-      <CompetitiveLandscapePanel onSave={onSave} />
     </div>
   );
 }
@@ -1600,6 +1617,11 @@ function CompetitiveLandscapePanel({ onSave }) {
   const [result, setResult] = useState(null);
   const [streamText, setStreamText] = useState("");
   const [errorDetail, setErrorDetail] = useState("");
+  // Ground-truth list of which user-entered competitor names did not return App Store data,
+  // captured at fetch time. Independent of Claude's downstream confidence judgment.
+  const [notFoundNames, setNotFoundNames] = useState([]);
+  // Storefront map: { competitorName: countryCode } for competitors found in non-US stores.
+  const [foreignStorefronts, setForeignStorefronts] = useState({});
   const accentLand = "#47ffb2"; // green for landscape
 
   const addCompetitor = () => {
@@ -1613,10 +1635,18 @@ function CompetitiveLandscapePanel({ onSave }) {
 
   const run = async () => {
     if (!space.trim() || competitors.length < 2) return;
-    setResult(null); setStreamText(""); setErrorDetail("");
+    setResult(null); setStreamText(""); setErrorDetail(""); setNotFoundNames([]); setForeignStorefronts({});
     try {
       setPhase("fetching");
       const competitorData = await Promise.all(competitors.map(c => fetchCompetitorData(c)));
+      // Capture ground truth on whether each user-entered name actually resolved to an App Store entry.
+      const missing = competitorData.filter(c => !c.appInfo).map(c => c.appName);
+      const foreign = {};
+      competitorData.forEach(c => {
+        if (c.appInfo?.storefront && c.appInfo.storefront !== "us") foreign[c.appInfo.name] = c.appInfo.storefront;
+      });
+      setNotFoundNames(missing);
+      setForeignStorefronts(foreign);
       setPhase("synthesizing");
       const analysis = await synthesizeCompetitiveLandscape(space, competitors, competitorData, p => setStreamText(p));
       if (analysis) { setResult(analysis); setPhase("done"); }
@@ -1624,17 +1654,19 @@ function CompetitiveLandscapePanel({ onSave }) {
     } catch (e) { setErrorDetail(e?.message || String(e)); setPhase("error"); }
   };
 
-  const clear = () => { setSpace(""); setCompetitors([]); setPhase("idle"); setResult(null); setStreamText(""); setErrorDetail(""); };
+  const clear = () => { setSpace(""); setCompetitors([]); setPhase("idle"); setResult(null); setStreamText(""); setErrorDetail(""); setNotFoundNames([]); setForeignStorefronts({}); };
   const busy = phase === "fetching" || phase === "synthesizing";
 
   const vulnColor = s => s >= 70 ? C.green : s >= 45 ? C.orange : C.red;
   const sentColor = s => s === "POSITIVE" ? C.green : s === "NEGATIVE" ? C.red : s === "UNKNOWN" ? C.muted : C.orange;
   const maturityColor = m => m === "EMERGING" ? C.green : m === "GROWING" ? C.accent : m === "MATURE" ? C.orange : C.red;
-  // Competitors the model flagged as having sparse data (no App Store match, reasoned from Reddit + general knowledge).
-  const sparseCompetitors = (result?.competitors || []).filter(c => c.dataConfidence === "LOW").map(c => c.name);
+  // The "not found on App Store" banner uses CLIENT-SIDE ground truth (notFoundNames),
+  // NOT Claude's downstream dataConfidence judgment. A new app with 4 reviews was still
+  // FOUND — its dataConfidence may be LOW because the analysis is necessarily thin, but
+  // it does not belong in a "not found" warning.
 
   return (
-    <div style={{ marginTop: 48, paddingTop: 40, borderTop: `1px solid ${C.border}` }}>
+    <div>
       {/* Header */}
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 20 }}>
         <h2 style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: accentLand }}>
@@ -1687,7 +1719,7 @@ function CompetitiveLandscapePanel({ onSave }) {
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={run} disabled={!space.trim() || competitors.length < 2 || busy}
             style={{ background: space.trim() && competitors.length >= 2 && !busy ? accentLand : C.muted, color: C.bg, border: "none", cursor: space.trim() && competitors.length >= 2 && !busy ? "pointer" : "default", padding: "12px 28px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", transition: "background .2s" }}>
-            {busy ? "Working…" : "Map the Landscape"}
+            Map the Landscape
           </button>
           {(phase === "done" || phase === "error") && (
             <button onClick={clear} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "12px 20px", borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "color .2s, border-color .2s" }}
@@ -1742,12 +1774,21 @@ function CompetitiveLandscapePanel({ onSave }) {
             )}
           </div>
 
-          {/* Sparse-data notice */}
-          {sparseCompetitors.length > 0 && (
+          {/* Not-found-on-App-Store notice (ground truth from fetch, not Claude's confidence) */}
+          {notFoundNames.length > 0 && (
             <div style={{ padding: "10px 14px", background: `${C.orange}0d`, border: `1px solid ${C.orange}44`, borderRadius: 5, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 10 }}>
               <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: C.orange }}>⚠</span>
               <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.6 }}>
-                <strong style={{ color: C.orange, letterSpacing: "0.05em" }}>{sparseCompetitors.join(", ")}</strong> {sparseCompetitors.length > 1 ? "were" : "was"} not found on the App Store. {sparseCompetitors.length > 1 ? "They were" : "It was"} characterized from Reddit mentions + general knowledge. For richer analysis, try the exact App Store name.
+                <strong style={{ color: C.orange, letterSpacing: "0.05em" }}>{notFoundNames.join(", ")}</strong> {notFoundNames.length > 1 ? "were" : "was"} not found on the App Store across US/UK/CA/AU/SG/NZ storefronts. {notFoundNames.length > 1 ? "They were" : "It was"} characterized from Reddit mentions + general knowledge. For richer analysis, try the exact App Store name.
+              </span>
+            </div>
+          )}
+          {/* Foreign-storefront notice — when an app was only found outside the US store */}
+          {Object.keys(foreignStorefronts).length > 0 && (
+            <div style={{ padding: "10px 14px", background: `${accentLand}0d`, border: `1px solid ${accentLand}44`, borderRadius: 5, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 10 }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, color: accentLand }}>i</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, lineHeight: 1.6 }}>
+                {Object.entries(foreignStorefronts).map(([name, cc]) => `${name} (${cc.toUpperCase()})`).join(", ")} resolved from {Object.keys(foreignStorefronts).length > 1 ? "non-US storefronts" : "a non-US storefront"}.
               </span>
             </div>
           )}
@@ -2317,24 +2358,24 @@ export default function Home() {
 
       <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'DM Sans', sans-serif", position: "relative", overflow: "hidden" }}>
         <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }}/>
-        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
+        <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
 
         <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
 
           {/* Header */}
           <div style={{ marginBottom: 32, animation: "fadeUp .6s ease both" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 4, background: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, display: "flex", alignItems: "center", justifyContent: "center", transition: "background .3s" }}>
+              <div style={{ width: 32, height: 32, borderRadius: 4, background: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent, display: "flex", alignItems: "center", justifyContent: "center", transition: "background .3s" }}>
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
                   <circle cx="7" cy="7" r="5" stroke={C.bg} strokeWidth="2"/>
                   <path d="M11 11l4 4" stroke={C.bg} strokeWidth="2" strokeLinecap="round"/>
                   <path d="M7 4v6M4 7h6" stroke={C.bg} strokeWidth="1.5" strokeLinecap="round"/>
                 </svg>
               </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent, fontWeight: 500, transition: "color .3s" }}>Niche Gap Analyzer</span>
             </div>
             <h1 style={{ fontFamily: "'Instrument Serif', serif", fontSize: "clamp(32px,5vw,52px)", fontWeight: 400, lineHeight: 1.1, marginBottom: 12 }}>
-              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
+              Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
             <p style={{ color: C.textDim, fontSize: 15, maxWidth: 520, lineHeight: 1.6 }}>
               Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis. Start with the Zeitgeist scan or validate a specific niche.
@@ -2344,16 +2385,17 @@ export default function Home() {
           {/* ── Above-tabs module — context-aware ── */}
           {activeTab === "saved" ? (
             <SavedStatsPanel saved={saved} onExport={() => exportSavedMarkdown(saved)} onDiveDeep={(niche) => { handleDiveDeep(niche); setActiveTab("b2c"); }} onClearAll={() => { if (window.confirm("Clear all saved opportunities?")) setSaved([]); }} />
-          ) : (
+          ) : activeTab === "landscape" ? null : (
             <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} />
           )}
 
           {/* Tabs */}
           <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
             {[
-              { key: "b2c",      label: "B2C — Consumer Apps",  accent: C.accent,     sub: "App Store · consumer Reddit" },
-              { key: "b2b",      label: "B2B — SaaS & Tools",   accent: C.accentB2B,  sub: "Professional communities · enterprise" },
-              { key: "saved",    label: "Saved",                 accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
+              { key: "b2c",       label: "B2C — Consumer Apps",   accent: C.accent,     sub: "App Store · consumer Reddit" },
+              { key: "b2b",       label: "B2B — SaaS & Tools",    accent: C.accentB2B,  sub: "Professional communities · enterprise" },
+              { key: "landscape", label: "Landscape Map",          accent: "#47ffb2",    sub: "Side-by-side competitor analysis" },
+              { key: "saved",     label: "Saved",                  accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
             ].map(tab => (
               <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
                 background: "none", border: "none", cursor: "pointer", padding: "12px 24px 14px",
@@ -2378,6 +2420,9 @@ export default function Home() {
           </div>
           <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
             <B2BPanel onSave={handleSave} />
+          </div>
+          <div style={{ display: activeTab === "landscape" ? "block" : "none" }}>
+            <CompetitiveLandscapePanel onSave={handleSave} />
           </div>
           <div style={{ display: activeTab === "saved" ? "block" : "none" }}>
             <SavedPanel saved={saved} onRemove={handleRemove} onNoteChange={handleNoteChange} />
