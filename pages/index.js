@@ -57,7 +57,7 @@ function RunStatusBanner({ result, redditFailed }) {
     );
   }
   if (redditFailed) {
-    messages.push("Reddit signal fetch failed for one or more queries — demand evidence below is partial. Verdict relies more heavily on App Store and synthesis context.");
+    messages.push("Reddit data is temporarily unavailable — this is a known issue while we onboard API access. Analysis below uses App Store reviews, Hacker News, and AI synthesis. Reddit signals will be included once API access is approved.");
   }
   return (
     <div style={{ marginTop: 24, padding: "14px 18px", border: `1px solid ${C.orange}55`, background: `${C.orange}11`, borderRadius: 6, display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -201,25 +201,54 @@ let __redditFailedDuringRun = false;
 function resetRedditFailureFlag() { __redditFailedDuringRun = false; }
 function didRedditFail() { return __redditFailedDuringRun; }
 
+// Session-level circuit breaker: if Reddit has failed consecutively, skip
+// further calls for a cooldown window to avoid wasting time on futile retries.
+let __redditCircuitFailCount = 0;
+let __redditCircuitOpenUntil = 0;  // epoch-ms when circuit re-closes
+const REDDIT_CIRCUIT_THRESHOLD = 3;  // consecutive failures to trip
+const REDDIT_CIRCUIT_COOLDOWN = 120_000;  // 2 min cooldown
+
 async function redditFetch(url) {
-  // Route through server-side proxy only — direct browser calls get CORS 429 from Reddit
+  // Circuit breaker: if Reddit has been consistently failing, return empty
+  // immediately instead of burning time on requests that will fail.
+  if (__redditCircuitOpenUntil > Date.now()) {
+    __redditFailedDuringRun = true;
+    return { data: { children: [] }, _failed: true, _error: "Reddit temporarily unavailable (circuit open)" };
+  }
+
   try {
     const res = await fetch(`/api/reddit?url=${encodeURIComponent(url)}`);
     if (res.ok) {
       const data = await res.json();
       if (data && data._failed) {
         __redditFailedDuringRun = true;
+        __redditCircuitFailCount++;
+        if (__redditCircuitFailCount >= REDDIT_CIRCUIT_THRESHOLD) {
+          __redditCircuitOpenUntil = Date.now() + REDDIT_CIRCUIT_COOLDOWN;
+          console.warn("[NICHE_GAP] Reddit circuit breaker tripped — skipping calls for 2 min");
+        }
         console.warn("[NICHE_GAP] Reddit proxy reported failure:", data._error);
+      } else {
+        // Success — reset circuit breaker
+        __redditCircuitFailCount = 0;
+        __redditCircuitOpenUntil = 0;
       }
       return data;
     }
     __redditFailedDuringRun = true;
+    __redditCircuitFailCount++;
+    if (__redditCircuitFailCount >= REDDIT_CIRCUIT_THRESHOLD) {
+      __redditCircuitOpenUntil = Date.now() + REDDIT_CIRCUIT_COOLDOWN;
+    }
     console.warn("[NICHE_GAP] Reddit proxy returned non-OK:", res.status);
   } catch (e) {
     __redditFailedDuringRun = true;
+    __redditCircuitFailCount++;
+    if (__redditCircuitFailCount >= REDDIT_CIRCUIT_THRESHOLD) {
+      __redditCircuitOpenUntil = Date.now() + REDDIT_CIRCUIT_COOLDOWN;
+    }
     console.warn("[NICHE_GAP] Reddit proxy fetch threw:", e);
   }
-  // Return empty structure so callers degrade gracefully
   return { data: { children: [] } };
 }
 
@@ -1195,8 +1224,9 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
   // and trigger React hydration errors (#418 / #423 / #425). Start with a
   // deterministic slice that is stable across server + first client render,
   // then swap to a random sample after mount.
-  const [trendingExamples, setTrendingExamples] = useState(() => TRENDING_B2C_EXAMPLES.slice(0, 5));
-  useEffect(() => { setTrendingExamples(randomSample(TRENDING_B2C_EXAMPLES, 5)); }, []);
+  // Shuffle on mount so the cloud feels different each visit, but show all tags
+  const [trendingExamples, setTrendingExamples] = useState(() => TRENDING_B2C_EXAMPLES);
+  useEffect(() => { setTrendingExamples(randomSample(TRENDING_B2C_EXAMPLES, TRENDING_B2C_EXAMPLES.length)); }, []);
   const [query, setQuery] = useState("");
   const [priorDiscovery, setPriorDiscovery] = useState(null);
   const runRef = useRef(null);
@@ -1315,22 +1345,25 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
         </div>
       </AdvancedToggle>
 
-      {/* Quick examples + sample report toggle — share a baseline, justify-between for organic spacing */}
-      <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", flex: "1 1 auto", minWidth: 0 }}>
+      {/* Tag cloud + sample report toggle */}
+      <div style={{ marginBottom: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>Trending searches</span>
+          {phase === "idle" && !result && (
+            <button onClick={() => setShowSample(v => !v)} style={{ background: "none", border: `1px dashed ${C.accent}66`, color: C.accent, fontSize: 10, padding: "3px 10px", borderRadius: 3, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              {showSample ? "✕ Hide sample" : "👁 Sample report"}
+            </button>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", lineHeight: 2 }}>
           {trendingExamples.map(ex => (
-            <button key={ex} onClick={() => setQuery(ex)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, padding: "4px 10px", borderRadius: 3, cursor: "pointer", fontFamily: "'DM Mono', monospace", transition: "border-color .2s,color .2s" }}
-              onMouseEnter={e => { e.target.style.borderColor = C.accent; e.target.style.color = C.accent; }}
-              onMouseLeave={e => { e.target.style.borderColor = C.border; e.target.style.color = C.textDim; }}>
+            <button key={ex} onClick={() => setQuery(ex)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 11, padding: "3px 9px", borderRadius: 12, cursor: "pointer", fontFamily: "'DM Mono', monospace", transition: "all .2s", whiteSpace: "nowrap" }}
+              onMouseEnter={e => { e.target.style.borderColor = C.accent; e.target.style.color = C.accent; e.target.style.background = `${C.accent}12`; }}
+              onMouseLeave={e => { e.target.style.borderColor = C.border; e.target.style.color = C.textDim; e.target.style.background = "none"; }}>
               {ex}
             </button>
           ))}
         </div>
-        {phase === "idle" && !result && (
-          <button onClick={() => setShowSample(v => !v)} style={{ flex: "0 0 auto", background: "none", border: `1px dashed ${C.accent}66`, color: C.accent, fontSize: 11, padding: "4px 12px", borderRadius: 3, cursor: "pointer", fontFamily: "'DM Mono', monospace", letterSpacing: "0.08em", textTransform: "uppercase" }}>
-            {showSample ? "✕ Hide sample" : "👁 See a sample report"}
-          </button>
-        )}
       </div>
 
       {/* Sample empty-state preview */}
@@ -1487,15 +1520,23 @@ function B2BPanel({ onSave }) {
         </div>
       </AdvancedToggle>
 
-      {/* Quick B2B examples */}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {["HR onboarding", "sales ops", "devops monitoring", "employee scheduling", "client reporting"].map(ex => (
-          <button key={ex} onClick={() => setQuery(ex)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 12, padding: "4px 10px", borderRadius: 3, cursor: "pointer", fontFamily: "'DM Mono', monospace", transition: "border-color .2s,color .2s" }}
-            onMouseEnter={e => { e.target.style.borderColor = C.accentB2B; e.target.style.color = C.accentB2B; }}
-            onMouseLeave={e => { e.target.style.borderColor = C.border; e.target.style.color = C.textDim; }}>
-            {ex}
-          </button>
-        ))}
+      {/* B2B tag cloud */}
+      <div style={{ marginBottom: 6 }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted, display: "block", marginBottom: 8 }}>Trending searches</span>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", lineHeight: 2 }}>
+          {["HR onboarding", "sales ops", "devops monitoring", "employee scheduling", "client reporting",
+            "contract lifecycle", "vendor management", "IT asset tracking", "compliance automation",
+            "customer success", "data pipeline observability", "expense management", "meeting intelligence",
+            "API documentation", "security questionnaires", "SOC 2 prep", "procurement workflow",
+            "internal knowledge base", "developer onboarding", "revenue forecasting",
+            "incident response", "feature flagging", "design handoff"].map(ex => (
+            <button key={ex} onClick={() => setQuery(ex)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.textDim, fontSize: 11, padding: "3px 9px", borderRadius: 12, cursor: "pointer", fontFamily: "'DM Mono', monospace", transition: "all .2s", whiteSpace: "nowrap" }}
+              onMouseEnter={e => { e.target.style.borderColor = C.accentB2B; e.target.style.color = C.accentB2B; e.target.style.background = `${C.accentB2B}12`; }}
+              onMouseLeave={e => { e.target.style.borderColor = C.border; e.target.style.color = C.textDim; e.target.style.background = "none"; }}>
+              {ex}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* B2B context note */}
@@ -1608,7 +1649,8 @@ For each opportunity:
 - Focus on genuine gaps where demand is expressed but supply is fragmented, expensive, or poorly UX'd
 
 Scoring rules:
-- 70+: RARE. Specific recent behavior shift AND no major player with a credible solution.
+- CALIBRATION WARNING: your scores will be cross-checked against live Reddit/App Store data immediately after this response. If you score 70+ and Reddit shows zero related posts, the score will be slashed in half. Be honest.
+- 70+: RARE. Specific recent behavior shift AND no major player with a credible solution. You must be confident people are actively discussing this online.
 - 45-69: Real interest, incumbents exist, differentiation is the whole game.
 - Below 45: Saturated, niche-of-a-niche, or demand lives outside discoverable channels.
 - DEFAULT TO SKEPTICISM. Ask: "If this were hot, would I already know the 3 apps chasing it?" If yes, score below 50.
@@ -1695,6 +1737,41 @@ async function synthesizeZeitgeist(onChunk) {
   // Remember these niches so the next run avoids repeats.
   remembermZeitgeistNiches(merged.map(o => o.niche));
 
+  // ── Signal-ground the Zeitgeist ────────────────────────────────────────
+  // Claude's speculative scores often diverge from reality. Run a quick
+  // Reddit signal check on each niche and adjust scores to reduce the gap
+  // between Zeitgeist and deep-dive findings.
+  onChunk("Validating against live signals…");
+  resetRedditFailureFlag();
+  const signalChecks = await Promise.allSettled(
+    merged.map(opp =>
+      redditFetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(opp.niche)}&sort=relevance&limit=10&t=year`)
+    )
+  );
+  for (let i = 0; i < merged.length; i++) {
+    const opp = merged[i];
+    const r = signalChecks[i];
+    const posts = r.status === "fulfilled" ? (r.value?.data?.children || []) : [];
+    const totalScore = posts.reduce((sum, p) => sum + (p.data?.score || 0), 0);
+    const postCount = posts.length;
+    // Adjust: no signal → penalize hard, weak signal → moderate penalty,
+    // strong signal → small boost (capped so scores don't inflate)
+    if (postCount === 0) {
+      opp.opportunityScore = Math.max(15, Math.round(opp.opportunityScore * 0.55));
+      opp._signalNote = "No Reddit signal found";
+    } else if (postCount <= 2 || totalScore < 20) {
+      opp.opportunityScore = Math.max(20, Math.round(opp.opportunityScore * 0.72));
+      opp._signalNote = `Weak signal (${postCount} posts, ${totalScore} karma)`;
+    } else if (postCount >= 7 && totalScore > 100) {
+      opp.opportunityScore = Math.min(92, Math.round(opp.opportunityScore * 1.08));
+      opp._signalNote = `Strong signal (${postCount} posts, ${totalScore} karma)`;
+    } else {
+      opp._signalNote = `Moderate signal (${postCount} posts, ${totalScore} karma)`;
+    }
+  }
+  // Re-sort after adjustment
+  merged.sort((a, b) => (b.opportunityScore ?? 0) - (a.opportunityScore ?? 0));
+
   // Preserve any truncation/salvage flags from either stream so the banner fires.
   const truncated = (rA.status === "fulfilled" && rA.value && (rA.value.__truncated || rA.value.__salvaged)) ||
                     (rB.status === "fulfilled" && rB.value && (rB.value.__truncated || rB.value.__salvaged)) ||
@@ -1706,6 +1783,7 @@ async function synthesizeZeitgeist(onChunk) {
     scannedAt: (rA.status === "fulfilled" && rA.value?.scannedAt) || (rB.status === "fulfilled" && rB.value?.scannedAt) || new Date().toISOString().slice(0, 7),
     opportunities: merged,
     __lenses: [lensA.label, lensB.label],
+    __signalGrounded: true,
     ...(truncated ? { __truncated: true } : {}),
     ...(salvaged ? { __salvaged: true } : {}),
   };
@@ -1776,7 +1854,13 @@ function ZeitgeistCard({ opp, onDiveDeep, onSave, accentDisc, scoreColor, demand
         </div>
       </div>
       {/* Verdict */}
-      <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.5, marginBottom: 8 }}>{opp.verdict}</div>
+      <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.5, marginBottom: 4 }}>{opp.verdict}</div>
+      {/* Signal grounding note */}
+      {opp._signalNote && (
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: opp._signalNote.startsWith("Strong") ? C.green : opp._signalNote.startsWith("No") ? C.red : C.orange, marginBottom: 6, opacity: 0.85 }}>
+          {opp._signalNote}
+        </div>
+      )}
       {/* Tags + actions */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, padding: "2px 6px", borderRadius: 2, background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{opp.type}</span>
@@ -3063,7 +3147,7 @@ export default function Home() {
               Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
             <p style={{ color: C.textDim, fontSize: 15, maxWidth: 520, lineHeight: 1.6 }}>
-              Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis.
+              Surface validated market gaps using Reddit pain signals, Hacker News discussion, App Store review analysis, and AI synthesis. Start with the Zeitgeist scan or validate a specific niche.
             </p>
           </div>
 
