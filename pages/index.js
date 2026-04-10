@@ -242,16 +242,16 @@ function mapRedditPosts(children, maxBody = 400) {
   }));
 }
 
-// Fan out two parallel Reddit searches: sort=relevance for quality, sort=new
-// for freshness. Merge, dedupe by post id (falling back to title), and return
-// the union. `sort=new` uses t=month so we don't drag in stale noise.
+// Fire two Reddit searches sequentially with a small gap to avoid burst-
+// triggering rate limits (especially on the unauthenticated fallback path).
+// Merge, dedupe by post id, and return the union.
 async function fetchRedditCombined(baseUrl) {
-  const [rel, fresh] = await Promise.allSettled([
-    redditFetch(`${baseUrl}&sort=relevance&t=year`),
-    redditFetch(`${baseUrl}&sort=new&t=month`),
-  ]);
-  const relChildren = rel.status === "fulfilled" ? (rel.value?.data?.children || []) : [];
-  const freshChildren = fresh.status === "fulfilled" ? (fresh.value?.data?.children || []) : [];
+  const rel = await redditFetch(`${baseUrl}&sort=relevance&t=year`);
+  await new Promise(r => setTimeout(r, 350));  // small stagger between calls
+  const fresh = await redditFetch(`${baseUrl}&sort=new&t=month`);
+  const relChildren  = rel?.data?.children  || [];
+  const freshChildren = fresh?.data?.children || [];
+  // relChildren / freshChildren already extracted above
   const seen = new Set();
   const merged = [];
   for (const c of [...relChildren, ...freshChildren]) {
@@ -277,16 +277,20 @@ async function fetchRedditDemandSignals(query, customSubs = [], useCustomOnly = 
   const defaultSubs = ["SaaS", "indiehackers", "startups", "nocode", "Entrepreneur", "apps"];
   const subs = useCustomOnly && customSubs.length > 0 ? customSubs : customSubs.length > 0 ? [...customSubs, ...defaultSubs] : defaultSubs;
   const searches = [`"is there an app" ${query}`, `"why is there no" ${query}`];
-  const results = await Promise.all(searches.map(async (q, i) => {
+  // Run sequentially with stagger to avoid burst rate-limits
+  const results = [];
+  for (let i = 0; i < searches.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 350));
+    const q = searches[i];
     try {
       const subFilter = subs.length > 0 ? `&restrict_sr=true` : "";
       const url = subs.length > 0
         ? `https://www.reddit.com/r/${subs.join("+")}/search.json?q=${encodeURIComponent(q)}&sort=relevance&limit=15&t=all${subFilter}`
         : `https://www.reddit.com/search.json?q=${encodeURIComponent(q)}&sort=relevance&limit=15&t=all&type=link`;
       const data = await redditFetch(url);
-      return (data?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit, daysAgo: daysAgoFromUtc(p.data.created_utc), demandType: i === 0 ? "seeking" : "lamenting" }));
-    } catch { return []; }
-  }));
+      results.push((data?.data?.children || []).map(p => ({ title: p.data.title, selftext: (p.data.selftext || "").slice(0, 300), score: p.data.score, subreddit: p.data.subreddit, daysAgo: daysAgoFromUtc(p.data.created_utc), demandType: i === 0 ? "seeking" : "lamenting" })));
+    } catch { results.push([]); }
+  }
   const seen = new Set();
   return results.flat().filter(p => { if (seen.has(p.title)) return false; seen.add(p.title); return true; }).sort((a, b) => b.score - a.score);
 }
