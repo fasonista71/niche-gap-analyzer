@@ -1160,6 +1160,35 @@ function randomSample(arr, n) {
   return copy.slice(0, n);
 }
 
+// ── AdvancedToggle — collapsible section for power-user form inputs ────────
+function AdvancedToggle({ children, accentColor = C.accent, hasItems = false }) {
+  const [open, setOpen] = useState(false);
+  // Auto-expand if the user already has items (e.g. from history restore)
+  useEffect(() => { if (hasItems) setOpen(true); }, [hasItems]);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button onClick={() => setOpen(v => !v)} style={{
+        background: "none", border: `1px dashed ${open ? accentColor + "66" : C.border}`, borderRadius: 4,
+        color: open ? accentColor : C.muted, cursor: "pointer", padding: "6px 14px",
+        fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700,
+        letterSpacing: "0.12em", textTransform: "uppercase", transition: "all .2s",
+        display: "flex", alignItems: "center", gap: 8, width: "100%",
+      }}
+        onMouseEnter={e => { e.currentTarget.style.borderColor = accentColor; e.currentTarget.style.color = accentColor; }}
+        onMouseLeave={e => { e.currentTarget.style.borderColor = open ? accentColor + "66" : C.border; e.currentTarget.style.color = open ? accentColor : C.muted; }}>
+        <span style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)", transition: "transform .2s", display: "inline-block" }}>▸</span>
+        Advanced Search
+        {hasItems && !open && <span style={{ fontSize: 9, opacity: 0.7 }}>(active)</span>}
+      </button>
+      {open && (
+        <div style={{ marginTop: 10, paddingLeft: 4, animation: "fadeUp .25s ease both" }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
   const [showSample, setShowSample] = useState(false);
   // Must NOT randomize on first render — SSR and the client would disagree
@@ -1264,27 +1293,27 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
         </button>
       </div>
 
-      {/* Subreddit targeting */}
-      <div style={{ marginBottom: 12 }}>
-        <ChipInput label="r/ target" placeholder="e.g. nursing, meditation, hiking…" items={subreddits} onAdd={s => setSubreddits(p => [...p, s])} onRemove={s => setSubreddits(p => p.filter(x => x !== s))} max={5} accentColor={C.accent} />
-        {subreddits.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
-            <button onClick={() => setUseCustomOnly(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-              <div style={{ width: 32, height: 18, borderRadius: 9, background: useCustomOnly ? C.accent : C.border, transition: "background .2s", position: "relative" }}>
-                <div style={{ position: "absolute", top: 3, left: useCustomOnly ? 17 : 3, width: 12, height: 12, borderRadius: "50%", background: useCustomOnly ? C.bg : C.textDim, transition: "left .2s" }}/>
-              </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: useCustomOnly ? C.accent : C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                {useCustomOnly ? "Custom subs only" : "Custom + default subs"}
-              </span>
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Competitors */}
-      <div style={{ marginBottom: 12 }}>
-        <ChipInput label="+ competitor" placeholder="e.g. Calm, Headspace, Insight Timer…" items={competitors} onAdd={c => setCompetitors(p => [...p, c])} onRemove={c => setCompetitors(p => p.filter(x => x !== c))} max={5} accentColor={C.accent} />
-      </div>
+      {/* Advanced Search — collapsed by default for clean interface */}
+      <AdvancedToggle accentColor={C.accent} hasItems={subreddits.length + competitors.length > 0}>
+        <div style={{ marginBottom: 12 }}>
+          <ChipInput label="r/ target" placeholder="e.g. nursing, meditation, hiking…" items={subreddits} onAdd={s => setSubreddits(p => [...p, s])} onRemove={s => setSubreddits(p => p.filter(x => x !== s))} max={5} accentColor={C.accent} />
+          {subreddits.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+              <button onClick={() => setUseCustomOnly(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                <div style={{ width: 32, height: 18, borderRadius: 9, background: useCustomOnly ? C.accent : C.border, transition: "background .2s", position: "relative" }}>
+                  <div style={{ position: "absolute", top: 3, left: useCustomOnly ? 17 : 3, width: 12, height: 12, borderRadius: "50%", background: useCustomOnly ? C.bg : C.textDim, transition: "left .2s" }}/>
+                </div>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: useCustomOnly ? C.accent : C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                  {useCustomOnly ? "Custom subs only" : "Custom + default subs"}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <ChipInput label="+ competitor" placeholder="e.g. Calm, Headspace, Insight Timer…" items={competitors} onAdd={c => setCompetitors(p => [...p, c])} onRemove={c => setCompetitors(p => p.filter(x => x !== c))} max={5} accentColor={C.accent} />
+        </div>
+      </AdvancedToggle>
 
       {/* Quick examples + sample report toggle — share a baseline, justify-between for organic spacing */}
       <div style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
@@ -1436,27 +1465,27 @@ function B2BPanel({ onSave }) {
         </button>
       </div>
 
-      {/* Subreddit targeting */}
-      <div style={{ marginBottom: 12 }}>
-        <ChipInput label="r/ target" placeholder="e.g. sysadmin, devops, humanresources…" items={subreddits} onAdd={s => setSubreddits(p => [...p, s])} onRemove={s => setSubreddits(p => p.filter(x => x !== s))} max={5} accentColor={C.accentB2B} />
-        {subreddits.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
-            <button onClick={() => setUseCustomOnly(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-              <div style={{ width: 32, height: 18, borderRadius: 9, background: useCustomOnly ? C.accentB2B : C.border, transition: "background .2s", position: "relative" }}>
-                <div style={{ position: "absolute", top: 3, left: useCustomOnly ? 17 : 3, width: 12, height: 12, borderRadius: "50%", background: useCustomOnly ? C.bg : C.textDim, transition: "left .2s" }}/>
-              </div>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: useCustomOnly ? C.accentB2B : C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                {useCustomOnly ? "Custom subs only" : "Custom + default subs"}
-              </span>
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* B2B Competitors */}
-      <div style={{ marginBottom: 12 }}>
-        <ChipInput label="+ competitor" placeholder="e.g. Salesforce, HubSpot, Notion, Jira…" items={competitors} onAdd={c => setCompetitors(p => [...p, c])} onRemove={c => setCompetitors(p => p.filter(x => x !== c))} max={5} accentColor={C.accentB2B} />
-      </div>
+      {/* Advanced Search — collapsed by default */}
+      <AdvancedToggle accentColor={C.accentB2B} hasItems={subreddits.length + competitors.length > 0}>
+        <div style={{ marginBottom: 12 }}>
+          <ChipInput label="r/ target" placeholder="e.g. sysadmin, devops, humanresources…" items={subreddits} onAdd={s => setSubreddits(p => [...p, s])} onRemove={s => setSubreddits(p => p.filter(x => x !== s))} max={5} accentColor={C.accentB2B} />
+          {subreddits.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+              <button onClick={() => setUseCustomOnly(v => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                <div style={{ width: 32, height: 18, borderRadius: 9, background: useCustomOnly ? C.accentB2B : C.border, transition: "background .2s", position: "relative" }}>
+                  <div style={{ position: "absolute", top: 3, left: useCustomOnly ? 17 : 3, width: 12, height: 12, borderRadius: "50%", background: useCustomOnly ? C.bg : C.textDim, transition: "left .2s" }}/>
+                </div>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: useCustomOnly ? C.accentB2B : C.muted, letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                  {useCustomOnly ? "Custom subs only" : "Custom + default subs"}
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <ChipInput label="+ competitor" placeholder="e.g. Salesforce, HubSpot, Notion, Jira…" items={competitors} onAdd={c => setCompetitors(p => [...p, c])} onRemove={c => setCompetitors(p => p.filter(x => x !== c))} max={5} accentColor={C.accentB2B} />
+        </div>
+      </AdvancedToggle>
 
       {/* Quick B2B examples */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1729,6 +1758,51 @@ Order by opportunityScore descending. Return exactly 8.`;
 
 
 // ── Opportunity row -- must be a real component to use useState ────────────
+// ── Compact Zeitgeist card for sidebar layout ─────────────────────────────
+function ZeitgeistCard({ opp, onDiveDeep, onSave, accentDisc, scoreColor, demandColor, compColor }) {
+  const [savedLocal, setSavedLocal] = useState(false);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px 14px", transition: "border-color .2s" }}
+      onMouseEnter={e => e.currentTarget.style.borderColor = accentDisc + "55"}
+      onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+      {/* Score + Niche */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 6 }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 18, fontWeight: 700, color: scoreColor(opp.opportunityScore), lineHeight: 1, flexShrink: 0 }}>{opp.opportunityScore}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.3, wordBreak: "break-word" }}>{opp.niche}</div>
+          <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, marginTop: 3, letterSpacing: "0.06em" }}>
+            {opp.domain && <span>{opp.domain}</span>}
+          </div>
+        </div>
+      </div>
+      {/* Verdict */}
+      <div style={{ fontSize: 11, color: C.textDim, lineHeight: 1.5, marginBottom: 8 }}>{opp.verdict}</div>
+      {/* Tags + actions */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, padding: "2px 6px", borderRadius: 2, background: opp.type === "whitespace" ? `${C.green}22` : `${C.orange}22`, color: opp.type === "whitespace" ? C.green : C.orange, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{opp.type}</span>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: demandColor(opp.demandStrength), fontWeight: 600, letterSpacing: "0.08em" }}>{opp.demandStrength}</span>
+        <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: compColor(opp.competitionLevel), fontWeight: 600, letterSpacing: "0.08em" }}>{opp.competitionLevel}</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+          <button onClick={() => onDiveDeep(opp)}
+            title={`Dive deep into "${opp.niche}"`}
+            style={{ background: `${accentDisc}15`, border: `1px solid ${accentDisc}44`, color: accentDisc, cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 8, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+            Dive →
+          </button>
+          {savedLocal ? (
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: "#ffd166", padding: "3px 6px" }}>Saved</span>
+          ) : (
+            <button onClick={() => { onSave && onSave(opp, "Discovery"); setSavedLocal(true); }}
+              title={`Save "${opp.niche}"`}
+              style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 8, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Save
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OpportunityRow({ opp, index, total, onDiveDeep, onSave, accentDisc, scoreColor, demandColor, compColor }) {
   const [sent, setSent] = useState(false);
   const [savedLocal, setSavedLocal] = useState(false);
@@ -2723,6 +2797,8 @@ function ZeitgeistHero({ onDiveDeep, onSave }) {
   const PAGE_SIZE = 5;
   const accentDisc = "#ff6bff";
 
+  const autoFired = useRef(false);
+
   const runZeitgeist = async () => {
     if (phase === "synth-zeitgeist" || phase === "synth-domain") return;
     setZeitgeistResult(null); setDrillResult(null); setDrillDomain(null);
@@ -2734,6 +2810,11 @@ function ZeitgeistHero({ onDiveDeep, onSave }) {
       else { setErrorDetail("Claude returned null."); setPhase("error"); }
     } catch (e) { console.error(e); setErrorDetail(e?.message || String(e)); setPhase("error"); }
   };
+
+  // Auto-fire on mount so there's content waiting when the page loads
+  useEffect(() => {
+    if (!autoFired.current) { autoFired.current = true; runZeitgeist(); }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const drillIntoDomain = async (domainLabel) => {
     const domain = DOMAINS.find(d => d.label === domainLabel);
@@ -2766,33 +2847,33 @@ function ZeitgeistHero({ onDiveDeep, onSave }) {
   return (
     <div style={{ marginBottom: 32 }}>
       {/* The main CTA button */}
-      <button onClick={() => !busy && runZeitgeist()} disabled={busy}
-        style={{
-          width: "100%", padding: "20px 28px",
-          background: busy ? `${accentDisc}12` : `${accentDisc}08`,
-          border: `1px solid ${busy ? accentDisc : accentDisc + "44"}`,
-          borderRadius: 10, cursor: busy ? "default" : "pointer",
-          transition: "border-color .2s, background .2s", marginBottom: 0,
-        }}
-        onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.background = `${accentDisc}14`; }}}
-        onMouseLeave={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "44"; e.currentTarget.style.background = `${accentDisc}08`; }}}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span style={{ fontSize: 24 }}>✨</span>
-            <div style={{ textAlign: "left" }}>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc, marginBottom: 3 }}>
-                {phase === "synth-zeitgeist" ? "Scanning the Zeitgeist…" : phase === "synth-domain" ? `Drilling into ${drillDomain?.label}…` : "Scan the Zeitgeist"}
-              </div>
-              <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim }}>
-                Cross-domain market scan · click any category below to drill deeper
-              </div>
-            </div>
-          </div>
-          {busy ? <Pulse color={accentDisc} /> : (
-            <div aria-hidden="true" style={{ fontFamily: "'DM Mono', monospace", fontSize: 13, color: accentDisc }}>→</div>
-          )}
+      {/* Sidebar header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 18 }}>✨</span>
+          <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase", color: accentDisc }}>Zeitgeist</span>
         </div>
-      </button>
+        <button onClick={() => !busy && runZeitgeist()} disabled={busy}
+          style={{
+            background: busy ? `${accentDisc}12` : `${accentDisc}08`,
+            border: `1px solid ${busy ? accentDisc : accentDisc + "44"}`,
+            borderRadius: 4, cursor: busy ? "default" : "pointer",
+            padding: "5px 12px", transition: "border-color .2s, background .2s",
+            fontFamily: "'DM Mono', monospace", fontSize: 10, fontWeight: 700,
+            letterSpacing: "0.1em", textTransform: "uppercase", color: accentDisc,
+          }}
+          onMouseEnter={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.background = `${accentDisc}14`; }}}
+          onMouseLeave={e => { if (!busy) { e.currentTarget.style.borderColor = accentDisc + "44"; e.currentTarget.style.background = `${accentDisc}08`; }}}>
+          {busy ? <Pulse color={accentDisc} /> : "↻ Rescan"}
+        </button>
+      </div>
+
+      {/* Status label */}
+      {busy && (
+        <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, marginBottom: 8, letterSpacing: "0.06em" }}>
+          {phase === "synth-zeitgeist" ? "Scanning the zeitgeist…" : `Drilling into ${drillDomain?.label}…`}
+        </div>
+      )}
 
       {/* Streaming preview */}
       {busy && streamText && (
@@ -2815,49 +2896,43 @@ function ZeitgeistHero({ onDiveDeep, onSave }) {
         <div style={{ marginTop: 12, animation: "fadeUp .4s ease both" }}>
           {/* Drill-in header */}
           {showingDrill && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, padding: "10px 14px", background: `${accentDisc}10`, border: `1px solid ${accentDisc}33`, borderRadius: 6 }}>
-              <button onClick={backToZeitgeist} style={{ background: "none", border: `1px solid ${accentDisc}55`, color: accentDisc, cursor: "pointer", padding: "3px 10px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                ← Back to Zeitgeist
-              </button>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.textDim, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                {drillDomain?.emoji} Deep dive · {drillDomain?.label} · {allOpps.length} opportunities
+            <div style={{ marginBottom: 10, padding: "8px 12px", background: `${accentDisc}10`, border: `1px solid ${accentDisc}33`, borderRadius: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <button onClick={backToZeitgeist} style={{ background: "none", border: `1px solid ${accentDisc}55`, color: accentDisc, cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 8, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                  ← Back
+                </button>
+                <button onClick={() => drillIntoDomain(drillDomain.label)} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 8px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 8, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                  ↻ Rescan
+                </button>
+              </div>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.textDim, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                {drillDomain?.emoji} {drillDomain?.label} · {allOpps.length} opps
               </span>
-              <button onClick={() => drillIntoDomain(drillDomain.label)} style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase" }}>
-                ↻ Rescan
-              </button>
             </div>
           )}
 
           {/* Domain drill-in chips (only on zeitgeist view) */}
           {!showingDrill && Object.keys(domainCounts).length > 0 && (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, color: C.muted, letterSpacing: "0.12em", textTransform: "uppercase", marginRight: 4 }}>Drill into:</span>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 8, color: C.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginRight: 2, width: "100%", marginBottom: 2 }}>Drill into:</span>
               {Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).map(([domainLabel, count]) => {
                 const d = DOMAINS.find(x => x.label === domainLabel);
                 return (
-                  <button key={domainLabel} onClick={() => drillIntoDomain(domainLabel)} title={`Run a deep scan of ${domainLabel}`}
-                    style={{ background: C.surface, color: C.textDim, border: `1px solid ${C.border}`, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", transition: "border-color .2s,color .2s" }}
+                  <button key={domainLabel} onClick={() => drillIntoDomain(domainLabel)} title={`Deep scan: ${domainLabel}`}
+                    style={{ background: C.surface, color: C.textDim, border: `1px solid ${C.border}`, cursor: "pointer", padding: "3px 7px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 8, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", transition: "border-color .2s,color .2s" }}
                     onMouseEnter={e => { e.currentTarget.style.borderColor = accentDisc; e.currentTarget.style.color = accentDisc; }}
                     onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.color = C.textDim; }}>
-                    {d?.emoji} {domainLabel.split(" ")[0]} {count} →
+                    {d?.emoji} {domainLabel.split(" ")[0]} {count}
                   </button>
                 );
               })}
-              <button onClick={runZeitgeist} style={{ background: "none", border: `1px solid ${C.border}`, color: C.muted, cursor: "pointer", padding: "3px 9px", borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", marginLeft: "auto" }}>
-                ↻ Rescan
-              </button>
             </div>
           )}
 
-          {/* Compact table */}
-          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "44px 1fr 70px 80px 90px 150px", gap: 0, padding: "8px 18px", borderBottom: `1px solid ${C.border}` }}>
-              {["Score", "Niche", "Type", "Demand", "Competition", ""].map((h, i) => (
-                <div key={i} style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: C.muted }}>{h}</div>
-              ))}
-            </div>
+          {/* Compact sidebar cards */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pageOpps.map((opp, i) => (
-              <OpportunityRow key={`hero-${showingDrill ? "drill" : "z"}-${page}-${i}`} opp={opp} index={i} total={pageOpps.length}
+              <ZeitgeistCard key={`zc-${showingDrill ? "drill" : "z"}-${page}-${i}`} opp={opp}
                 onDiveDeep={onDiveDeep} onSave={onSave} accentDisc={accentDisc}
                 scoreColor={scoreColor} demandColor={demandColor} compColor={compColor} />
             ))}
@@ -2945,6 +3020,14 @@ export default function Home() {
             outline:2px solid #e8ff47;outline-offset:2px;border-radius:3px;
           }
           /* Body copy fluid scaling so 320px and 120% zoom remain readable */
+          .ng-two-col{display:grid;grid-template-columns:380px 1fr;gap:32px;align-items:start;}
+          .ng-col-left{position:sticky;top:24px;max-height:calc(100vh - 48px);overflow-y:auto;scrollbar-width:thin;}
+          .ng-col-left::-webkit-scrollbar{width:3px}
+          .ng-col-left::-webkit-scrollbar-thumb{background:#1e1e24;border-radius:2px}
+          @media (max-width:960px){
+            .ng-two-col{grid-template-columns:1fr !important;gap:24px !important;}
+            .ng-col-left{position:static !important;max-height:none !important;overflow-y:visible !important;}
+          }
           @media (max-width:680px){
             .ng-body{font-size:13px !important;}
             .ng-grid-3{grid-template-columns:1fr !important;}
@@ -2962,7 +3045,7 @@ export default function Home() {
         <div style={{ position: "fixed", inset: 0, background: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(255,255,255,.012) 2px,rgba(255,255,255,.012) 4px)", pointerEvents: "none", zIndex: 0 }}/>
         <div style={{ position: "fixed", top: -200, right: -200, width: 600, height: 600, borderRadius: "50%", background: `radial-gradient(circle,${activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent}18 0%,transparent 70%)`, pointerEvents: "none", zIndex: 0, transition: "background 0.5s" }}/>
 
-        <div style={{ position: "relative", zIndex: 1, maxWidth: 880, margin: "0 auto", padding: "48px 24px 80px" }}>
+        <div style={{ position: "relative", zIndex: 1, maxWidth: 1200, margin: "0 auto", padding: "48px 24px 80px" }}>
 
           {/* Header */}
           <div style={{ marginBottom: 32, animation: "fadeUp .6s ease both" }}>
@@ -2980,60 +3063,67 @@ export default function Home() {
               Find what people want<br/><em style={{ color: activeTab === "b2b" ? C.accentB2B : activeTab === "saved" ? "#ffd166" : activeTab === "landscape" ? "#47ffb2" : C.accent, transition: "color .3s" }}>that nobody's built yet.</em>
             </h1>
             <p style={{ color: C.textDim, fontSize: 15, maxWidth: 520, lineHeight: 1.6 }}>
-              Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis. Start with the Zeitgeist scan or validate a specific niche.
+              Surface validated market gaps using Reddit pain signals, App Store review analysis, and AI synthesis.
             </p>
           </div>
 
-          {/* ── Above-tabs module — context-aware ── */}
-          {activeTab === "saved" ? (
-            <SavedStatsPanel saved={saved} onExport={() => exportSavedMarkdown(saved)} onDiveDeep={(niche) => { handleDiveDeep(niche); setActiveTab("b2c"); }} onClearAll={() => { if (window.confirm("Clear all saved opportunities?")) setSaved([]); }} />
-          ) : (
-            <ZeitgeistHero onDiveDeep={handleDiveDeep} onSave={handleSave} />
-          )}
+          {/* ── Two-column layout: Zeitgeist left, forms right ── */}
+          <div className="ng-two-col">
 
-          {/* Tabs */}
-          <div style={{ display: "flex", gap: 0, marginBottom: 32, borderBottom: `1px solid ${C.border}` }}>
-            {[
-              { key: "b2c",       label: "B2C — Consumer Apps",   accent: C.accent,     sub: "App Store · consumer Reddit" },
-              { key: "b2b",       label: "B2B — SaaS & Tools",    accent: C.accentB2B,  sub: "Professional communities · enterprise" },
-              { key: "landscape", label: "Landscape",              accent: "#47ffb2",    sub: "side-by-side competitor map" },
-              { key: "saved",     label: "Saved",                  accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount} item${savedCount !== 1 ? "s" : ""}` : "your shortlist" },
-            ].map(tab => (
-              <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-                background: "none", border: "none", cursor: "pointer", padding: "12px 24px 14px",
-                borderBottom: activeTab === tab.key ? `2px solid ${tab.accent}` : "2px solid transparent",
-                marginBottom: -1, transition: "border-color .2s", position: "relative",
-                textAlign: "left",
-              }}>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: activeTab === tab.key ? tab.accent : C.muted, transition: "color .2s", marginBottom: 3, display: "flex", alignItems: "center", gap: 6 }}>
-                  {tab.label}
-                  {tab.key === "saved" && savedCount > 0 && (
-                    <span style={{ background: "#ffd166", color: C.bg, borderRadius: 10, fontSize: 9, fontWeight: 700, padding: "1px 6px", lineHeight: 1.4 }}>{savedCount}</span>
-                  )}
-                </div>
-                <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", color: activeTab === tab.key ? C.textDim : C.muted, textTransform: "uppercase" }}>{tab.sub}</div>
-              </button>
-            ))}
-          </div>
+            {/* Left column — Zeitgeist (always visible, auto-fires on load) */}
+            <div className="ng-col-left">
+              <ZeitgeistHero onDiveDeep={(opp) => { handleDiveDeep(opp); setActiveTab("b2c"); }} onSave={handleSave} />
+            </div>
 
-          {/* Active panel — all kept mounted to preserve state */}
-          <div style={{ display: activeTab === "b2c" ? "block" : "none" }}>
-            <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} onSave={handleSave} />
-          </div>
-          <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
-            <B2BPanel onSave={handleSave} />
-          </div>
-          <div style={{ display: activeTab === "landscape" ? "block" : "none" }}>
-            <CompetitiveLandscapePanel onSave={handleSave} />
-          </div>
-          <div style={{ display: activeTab === "saved" ? "block" : "none" }}>
-            <SavedPanel saved={saved} onRemove={handleRemove} onNoteChange={handleNoteChange} onDiveDeep={(opp) => { handleDiveDeep(opp); setActiveTab("b2c"); }} />
+            {/* Right column — tabs + panels */}
+            <div className="ng-col-right">
+              {/* Tabs */}
+              <div style={{ display: "flex", gap: 0, marginBottom: 24, borderBottom: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+                {[
+                  { key: "b2c",       label: "B2C",        accent: C.accent,     sub: "Consumer apps" },
+                  { key: "b2b",       label: "B2B",        accent: C.accentB2B,  sub: "SaaS & tools" },
+                  { key: "landscape", label: "Landscape",   accent: "#47ffb2",    sub: "Competitor map" },
+                  { key: "saved",     label: "Saved",       accent: "#ffd166",    sub: savedCount > 0 ? `${savedCount}` : "—" },
+                ].map(tab => (
+                  <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+                    background: "none", border: "none", cursor: "pointer", padding: "10px 18px 12px",
+                    borderBottom: activeTab === tab.key ? `2px solid ${tab.accent}` : "2px solid transparent",
+                    marginBottom: -1, transition: "border-color .2s", position: "relative",
+                    textAlign: "left",
+                  }}>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: activeTab === tab.key ? tab.accent : C.muted, transition: "color .2s", display: "flex", alignItems: "center", gap: 6 }}>
+                      {tab.label}
+                      {tab.key === "saved" && savedCount > 0 && (
+                        <span style={{ background: "#ffd166", color: C.bg, borderRadius: 10, fontSize: 9, fontWeight: 700, padding: "1px 6px", lineHeight: 1.4 }}>{savedCount}</span>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: "'DM Mono', monospace", fontSize: 9, letterSpacing: "0.1em", color: activeTab === tab.key ? C.textDim : C.muted, textTransform: "uppercase", marginTop: 2 }}>{tab.sub}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Active panel — all kept mounted to preserve state */}
+              <div style={{ display: activeTab === "b2c" ? "block" : "none" }}>
+                <B2CPanel prefill={b2cPrefill} onPrefillConsumed={() => setB2cPrefill(null)} onSave={handleSave} />
+              </div>
+              <div style={{ display: activeTab === "b2b" ? "block" : "none" }}>
+                <B2BPanel onSave={handleSave} />
+              </div>
+              <div style={{ display: activeTab === "landscape" ? "block" : "none" }}>
+                <CompetitiveLandscapePanel onSave={handleSave} />
+              </div>
+              <div style={{ display: activeTab === "saved" ? "block" : "none" }}>
+                <SavedStatsPanel saved={saved} onExport={() => exportSavedMarkdown(saved)} onDiveDeep={(niche) => { handleDiveDeep(niche); setActiveTab("b2c"); }} onClearAll={() => { if (window.confirm("Clear all saved opportunities?")) setSaved([]); }} />
+                <SavedPanel saved={saved} onRemove={handleRemove} onNoteChange={handleNoteChange} onDiveDeep={(opp) => { handleDiveDeep(opp); setActiveTab("b2c"); }} />
+              </div>
+            </div>
+
           </div>
 
           {/* Footer */}
           <div style={{ marginTop: 60, paddingTop: 20, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>SOURCES: Reddit API · App Store RSS · Claude Synthesis</span>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>v0.4 · © {new Date().getFullYear()} jasonpfields.com</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>v0.5 · © {new Date().getFullYear()} jasonpfields.com</span>
           </div>
 
         </div>
