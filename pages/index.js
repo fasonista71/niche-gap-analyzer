@@ -490,6 +490,75 @@ async function itunesSearchMulti(term) {
   return { app: null, country: null };
 }
 
+// ── Google Play Store ──────────────────────────────────────────────────────
+async function fetchGooglePlaySearch(query) {
+  try {
+    const res = await fetch(`/api/gplay?action=search&q=${encodeURIComponent(query)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data._failed) { console.warn("[NICHE_GAP] Google Play search failed:", data._error); return []; }
+    return data.apps || [];
+  } catch (e) { console.warn("[NICHE_GAP] Google Play search error:", e); return []; }
+}
+
+async function fetchGooglePlayReviews(appId) {
+  try {
+    const res = await fetch(`/api/gplay?action=reviews&appId=${encodeURIComponent(appId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data._failed) return [];
+    return data.reviews || [];
+  } catch { return []; }
+}
+
+async function fetchGooglePlaySignals(query) {
+  try {
+    const apps = await fetchGooglePlaySearch(query);
+    if (apps.length === 0) return { app: null, apps: [], reviews: [] };
+    const primary = apps[0];
+    // Fetch reviews for the top match
+    const reviews = await fetchGooglePlayReviews(primary.appId);
+    const shaped = {
+      name: primary.title,
+      developer: primary.developer,
+      rating: primary.score,
+      reviewCount: primary.ratings,
+      installs: primary.installs,
+      category: primary.genre,
+      icon: primary.icon,
+      price: primary.free ? "Free" : "Paid",
+      url: primary.url,
+      platform: "android",
+      reviewsSample: reviews.slice(0, 20),
+      lowReviews: reviews.filter(r => r.score <= 2).slice(0, 8),
+    };
+    const othersShaped = apps.slice(1, 5).map(a => ({
+      name: a.title, developer: a.developer, rating: a.score,
+      reviewCount: a.ratings, installs: a.installs, category: a.genre,
+      price: a.free ? "Free" : "Paid", url: a.url, platform: "android",
+    }));
+    return { app: shaped, apps: [shaped, ...othersShaped], reviews };
+  } catch { return { app: null, apps: [], reviews: [] }; }
+}
+
+async function fetchGooglePlayCompetitor(appName) {
+  try {
+    const apps = await fetchGooglePlaySearch(appName);
+    if (apps.length === 0) return null;
+    // Find best match by name
+    const wanted = appName.trim().toLowerCase();
+    const exact = apps.find(a => a.title.toLowerCase() === wanted);
+    const best = exact || apps[0];
+    const reviews = await fetchGooglePlayReviews(best.appId);
+    return {
+      name: best.title, developer: best.developer, rating: best.score,
+      reviewCount: best.ratings, installs: best.installs, category: best.genre,
+      price: best.free ? "Free" : "Paid", url: best.url, platform: "android",
+      lowReviews: reviews.filter(r => r.score <= 2).slice(0, 6),
+    };
+  } catch { return null; }
+}
+
 async function fetchCompetitorData(appName) {
   try {
     const { app, country } = await itunesSearchMulti(appName);
@@ -643,12 +712,19 @@ async function fetchB2BReviewSignals(toolName) {
 }
 
 // ── Claude synthesis — B2C ─────────────────────────────────────────────────
-async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorData, onChunk, priorDiscovery = null, hnPosts = []) {
+async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorData, onChunk, priorDiscovery = null, hnPosts = [], gplayData = {}) {
   const ageTag = p => p.daysAgo != null ? ` ·${p.daysAgo}d` : "";
   const redditSummary = redditPosts.slice(0, 10).map(p => `[r/${p.subreddit}${ageTag(p)}] "${p.title}" — ${p.selftext?.slice(0, 200) || "no body"}`).join("\n");
   const demandSummary = demandPosts.slice(0, 10).map(p => `[${p.demandType === "seeking" ? "SEEKING" : "LAMENTING"} · r/${p.subreddit} · ↑${p.score}${ageTag(p)}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 200)}` : ""}`).join("\n");
   const hnSummary = (hnPosts || []).slice(0, 10).map(h => `[HN ${h.type} · ↑${h.points}${ageTag(h)}] "${h.title}"${h.text ? ` — ${h.text.slice(0, 200)}` : ""}`).join("\n");
   const reviewSummary = appStoreData.reviews.filter(r => r.rating <= 2).slice(0, 10).map(r => `★${r.rating} "${r.title}": ${r.content?.slice(0, 200)}`).join("\n");
+  // Google Play data
+  const gplayApp = gplayData?.app;
+  const gplayApps = gplayData?.apps || [];
+  const gplayReviews = gplayData?.reviews || [];
+  const gplayInfo = gplayApp ? `"${gplayApp.name}" by ${gplayApp.developer} — ★${gplayApp.rating?.toFixed(1)} · ${gplayApp.installs || "?"} installs · ${gplayApp.url || "no URL"}` : "No Google Play match found.";
+  const gplayLowReviews = gplayReviews.filter(r => r.score <= 2).slice(0, 8).map(r => `★${r.score} "${r.title || ""}": ${r.text?.slice(0, 200)}`).join("\n");
+  const gplayAppsBlock = gplayApps.length > 1 ? `\nGOOGLE PLAY CANDIDATES:\n${gplayApps.slice(0, 5).map(a => `- ${a.name} by ${a.developer} — ★${(a.rating || 0).toFixed(1)} · ${a.installs || "?"} installs · ${a.category} · ${a.price || "Free"}`).join("\n")}\n` : "";
   // Multi-app candidate block — auto-detected apps beyond the primary. Each
   // line carries the App Store URL so Claude can echo it back in competitorMatrix.
   const allApps = appStoreData.apps || (appStoreData.app ? [appStoreData.app] : []);
@@ -667,25 +743,29 @@ async function synthesizeB2C(query, redditPosts, demandPosts, appStoreData, comp
 
   const priorSection = priorDiscovery ? `\nPRIOR ZEITGEIST VERDICT (cold read, no live signal):\n- Score: ${priorDiscovery.opportunityScore ?? "n/a"}/100\n- Type: ${priorDiscovery.type || "n/a"}\n- Demand: ${priorDiscovery.demandStrength || "n/a"} · Competition: ${priorDiscovery.competitionLevel || "n/a"}\n- Trend driver: ${priorDiscovery.trendDriver || "n/a"}\n- Existing players: ${(priorDiscovery.existingSolutions || []).join(", ") || "n/a"}\n\nRECONCILIATION RULE: The Zeitgeist score was a cold read from training data. You now have LIVE Reddit + App Store signal. Your job is to ground-truth the prior. If live signal CONFIRMS the prior, your scores should be close to it. If live signal CONTRADICTS it (e.g. the prior said HIGH demand but Reddit shows crickets), you MUST lower your scores AND lead your verdict with the contradiction — e.g. "Despite apparent category interest, live demand signal is minimal…". Never silently flip a 65 to a 25 without saying why in the verdict. Name the delta explicitly.\n` : "";
 
-  const prompt = `You are a sharp product strategist. Analyze B2C signals for: "${query}"\n${priorSection}\nAPP STORE PRIMARY (auto-detected, US storefront): ${appInfo}\nLOW-RATED REVIEWS (primary): ${reviewSummary || "None."}\n${autoDetectedAppsBlock}${competitorSection}\nREDDIT — GENERAL: ${redditSummary || "None."}\nREDDIT — RAW DEMAND: ${demandSummary || "None."}\nHACKER NEWS: ${hnSummary || "None."}\n\n${signalHint}\n${recencyNote}\n\nCOMPETITOR MATRIX RULE: Include every auto-detected app and every user-named competitor that is plausibly in the same product space. Echo each app's URL verbatim into the "appStoreUrl" field of its competitorMatrix entry. If you skip an auto-detected app because it is a clear false-positive (wrong category, unrelated), do so silently — do not omit relevant ones.\n\nWeight RAW DEMAND most heavily. ${competitorData.length > 0 ? "For NAMED COMPETITORS: gaps ALL fail to solve = highest-value whitespace." : ""}\n\nScoring rubric — be decisive and use the full 0-100 range, not just 25/50/75:\n- demandScore: intensity AND volume of pain/seeking signals. 80+ = many loud voices. 40-60 = some signal but tepid. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. 40-60 = moderate competition with cracks. <30 = saturated with strong incumbents.\n- timingScore: is the trend accelerating or stagnant? 80+ = clearly accelerating demand. 50 = steady. <30 = shrinking or niche-of-a-niche.\n- opportunityScore: weighted composite roughly (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich Reddit + reviews, MEDIUM if limited, LOW if barely any organic signal found (likely professional niche).\n- professionalNicheWarning: string or null. If signal is LOW because the audience doesn't post on Reddit (CRNAs, surgeons, enterprise buyers, first responders, etc.), return a 1-sentence warning pointing to where demand actually lives (LinkedIn groups / professional associations / conference proceedings). Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline — the takeaway a founder would quote>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific>","redditInsight":"<most revealing>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<app>","rating":<n>,"topComplaint":"<complaint>","missingFeature":"<feature>","pricePoint":"<price>","weaknessScore":<0-100>,"appStoreUrl":"<verbatim URL from the auto-detected block, or null>"}],"sharedWeakness":"<gap ALL fail to solve>","buildRecommendation":"<1-2 features>","warnings":["<r1>","<r2>"]}`;
+  const prompt = `You are a sharp product strategist. Analyze B2C signals for: "${query}"\n${priorSection}\nAPP STORE PRIMARY (auto-detected, US storefront): ${appInfo}\nLOW-RATED REVIEWS (iOS primary): ${reviewSummary || "None."}\n${autoDetectedAppsBlock}\nGOOGLE PLAY PRIMARY (Android): ${gplayInfo}\nLOW-RATED REVIEWS (Android): ${gplayLowReviews || "None."}\n${gplayAppsBlock}${competitorSection}\nREDDIT — GENERAL: ${redditSummary || "None."}\nREDDIT — RAW DEMAND: ${demandSummary || "None."}\nHACKER NEWS: ${hnSummary || "None."}\n\n${signalHint}\n${recencyNote}\n\nCOMPETITOR MATRIX RULE: Include every auto-detected app and every user-named competitor that is plausibly in the same product space. Echo each app's URL verbatim into the "appStoreUrl" field of its competitorMatrix entry. If you skip an auto-detected app because it is a clear false-positive (wrong category, unrelated), do so silently — do not omit relevant ones.\n\nWeight RAW DEMAND most heavily. ${competitorData.length > 0 ? "For NAMED COMPETITORS: gaps ALL fail to solve = highest-value whitespace." : ""}\n\nScoring rubric — be decisive and use the full 0-100 range, not just 25/50/75:\n- demandScore: intensity AND volume of pain/seeking signals. 80+ = many loud voices. 40-60 = some signal but tepid. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. 40-60 = moderate competition with cracks. <30 = saturated with strong incumbents.\n- timingScore: is the trend accelerating or stagnant? 80+ = clearly accelerating demand. 50 = steady. <30 = shrinking or niche-of-a-niche.\n- opportunityScore: weighted composite roughly (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich Reddit + reviews, MEDIUM if limited, LOW if barely any organic signal found (likely professional niche).\n- professionalNicheWarning: string or null. If signal is LOW because the audience doesn't post on Reddit (CRNAs, surgeons, enterprise buyers, first responders, etc.), return a 1-sentence warning pointing to where demand actually lives (LinkedIn groups / professional associations / conference proceedings). Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline — the takeaway a founder would quote>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific>","redditInsight":"<most revealing>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<app>","rating":<n>,"topComplaint":"<complaint>","missingFeature":"<feature>","pricePoint":"<price>","weaknessScore":<0-100>,"appStoreUrl":"<verbatim URL from the auto-detected block, or null>"}],"sharedWeakness":"<gap ALL fail to solve>","buildRecommendation":"<1-2 features>","warnings":["<r1>","<r2>"]}`;
 
   return streamClaude(prompt, onChunk);
 }
 
 // ── Claude synthesis — B2B ─────────────────────────────────────────────────
-async function synthesizeB2B(query, redditPosts, demandPosts, competitorReviews, competitorData, onChunk, hnPosts = []) {
+async function synthesizeB2B(query, redditPosts, demandPosts, competitorReviews, competitorData, onChunk, hnPosts = [], gplayData = {}) {
   const ageTag = p => p.daysAgo != null ? ` ·${p.daysAgo}d` : "";
   const redditSummary = redditPosts.slice(0, 10).map(p => `[r/${p.subreddit}${ageTag(p)}] "${p.title}" — ${p.selftext?.slice(0, 200) || "no body"}`).join("\n");
   const demandSummary = demandPosts.slice(0, 10).map(p => `[r/${p.subreddit} · ↑${p.score}${ageTag(p)}] "${p.title}"${p.selftext ? ` — ${p.selftext.slice(0, 200)}` : ""}`).join("\n");
   const hnSummary = (hnPosts || []).slice(0, 10).map(h => `[HN ${h.type} · ↑${h.points}${ageTag(h)}] "${h.title}"${h.text ? ` — ${h.text.slice(0, 200)}` : ""}`).join("\n");
   const reviewSummary = competitorReviews.map(r => `[${r.subreddit}] "${r.title}": ${r.selftext?.slice(0,200)}`).join("\n");
+  // Google Play data for B2B
+  const gplayApps = gplayData?.apps || [];
+  const gplayReviews = gplayData?.reviews || [];
+  const gplayBlock = gplayApps.length > 0 ? `\nGOOGLE PLAY APPS:\n${gplayApps.slice(0, 5).map(a => `- ${a.name} by ${a.developer} — ★${(a.rating || 0).toFixed(1)} · ${a.installs || "?"} installs · ${a.category} · ${a.price || "Free"}`).join("\n")}\nLOW-RATED ANDROID REVIEWS:\n${gplayReviews.filter(r => r.score <= 2).slice(0, 6).map(r => `★${r.score} "${r.title || ""}": ${r.text?.slice(0, 200)}`).join("\n") || "None."}\n` : "";
   const competitorSection = competitorData.length > 0 ? `\nNAMED B2B COMPETITORS:\n${competitorData.map(c => { if (!c.appInfo) return `${c.appName}: Not found on App Store (may be web-only B2B tool).`; const reviews = c.lowReviews.map(r => `  ★${r.rating} "${r.title}": ${r.content?.slice(0,150)}`).join("\n") || "  No low-rated reviews."; const mentions = c.mentions.map(m => `  [r/${m.subreddit} ↑${m.score}] "${m.title}"`).join("\n") || "  No Reddit mentions."; return `${c.appInfo.name} — ★${c.appInfo.rating?.toFixed(1)} · ${c.appInfo.price || "Free"}\n  Reviews:\n${reviews}\n  Mentions:\n${mentions}`; }).join("\n\n")}` : "";
 
   const b2bSignalCount = (redditPosts?.length || 0) + (demandPosts?.length || 0) + (hnPosts?.length || 0);
   const b2bSignalHint = b2bSignalCount < 5 ? "SIGNAL HINT: Very few organic posts found — B2B buyers often don't talk on public forums. Set signalConfidence to LOW and populate professionalNicheWarning pointing to G2/Capterra/LinkedIn groups/industry conferences." : b2bSignalCount < 12 ? "SIGNAL HINT: Organic signal is thin for this B2B query — consider MEDIUM confidence." : "SIGNAL HINT: Organic signal is adequate.";
   const b2bRecencyNote = "RECENCY NOTE: Each post is tagged with how many days ago it was posted (·Nd). Weight sub-30-day posts most heavily when scoring timingScore — they represent current, not stale, demand.";
 
-  const prompt = `You are a B2B SaaS product strategist. Analyze enterprise/professional signals for: "${query}"\n\nREDDIT — PROFESSIONAL COMMUNITIES: ${redditSummary || "None."}\nREDDIT — DEMAND SIGNALS: ${demandSummary || "None."}\nHACKER NEWS: ${hnSummary || "None."}\nCOMPETITOR COMPLAINT SIGNALS: ${reviewSummary || "None."}\n${competitorSection}\n\n${b2bSignalHint}\n${b2bRecencyNote}\n\nFocus on: workflow pain, integration gaps, pricing complaints, onboarding friction, missing enterprise features, buyer vs user misalignment. Think in terms of ICP, GTM motion, and willingness to pay.\n\nScoring rubric — be decisive and use the full 0-100 range:\n- demandScore: intensity AND volume of professional pain signals. 80+ = loud, repeated pain. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. <30 = saturated enterprise space with entrenched incumbents.\n- timingScore: trend direction. 80+ = clearly accelerating (new regulation, shifting workflow). 50 = steady. <30 = stagnant category.\n- opportunityScore: weighted composite (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich professional signal, MEDIUM if thin, LOW if barely any (typical for regulated/enterprise niches).\n- professionalNicheWarning: string or null. If signal is LOW because buyers live in G2/Capterra/LinkedIn groups/industry conferences rather than Reddit, return a 1-sentence warning pointing there. Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific job title / company type>","redditInsight":"<most revealing signal>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<tool>","rating":<n>,"topComplaint":"<enterprise complaint>","missingFeature":"<missing feature>","pricePoint":"<pricing>","weaknessScore":<0-100>}],"sharedWeakness":"<gap ALL fail to solve>","icp":"<ideal customer profile — role, company size, industry>","gtmMotion":"<recommended GTM — PLG / sales-led / community-led>","buyerInsights":"<2-3 sentences on buyer psychology and what makes them switch>","buildRecommendation":"<1-2 features that would win enterprise deals>","warnings":["<r1>","<r2>"]}`;
+  const prompt = `You are a B2B SaaS product strategist. Analyze enterprise/professional signals for: "${query}"\n\nREDDIT — PROFESSIONAL COMMUNITIES: ${redditSummary || "None."}\nREDDIT — DEMAND SIGNALS: ${demandSummary || "None."}\nHACKER NEWS: ${hnSummary || "None."}\n${gplayBlock}COMPETITOR COMPLAINT SIGNALS: ${reviewSummary || "None."}\n${competitorSection}\n\n${b2bSignalHint}\n${b2bRecencyNote}\n\nFocus on: workflow pain, integration gaps, pricing complaints, onboarding friction, missing enterprise features, buyer vs user misalignment. Think in terms of ICP, GTM motion, and willingness to pay.\n\nScoring rubric — be decisive and use the full 0-100 range:\n- demandScore: intensity AND volume of professional pain signals. 80+ = loud, repeated pain. <30 = crickets.\n- competitionScore: INVERSE of saturation — HIGHER score = MORE opportunity. 80+ = whitespace or weak incumbents. <30 = saturated enterprise space with entrenched incumbents.\n- timingScore: trend direction. 80+ = clearly accelerating (new regulation, shifting workflow). 50 = steady. <30 = stagnant category.\n- opportunityScore: weighted composite (demand*0.4 + competition*0.35 + timing*0.25).\n- signalConfidence: HIGH if rich professional signal, MEDIUM if thin, LOW if barely any (typical for regulated/enterprise niches).\n- professionalNicheWarning: string or null. If signal is LOW because buyers live in G2/Capterra/LinkedIn groups/industry conferences rather than Reddit, return a 1-sentence warning pointing there. Otherwise null.\n\nRespond JSON only, no markdown:\n\n{"opportunityScore":<0-100>,"demandScore":<0-100>,"competitionScore":<0-100>,"timingScore":<0-100>,"signalConfidence":"<HIGH|MEDIUM|LOW>","professionalNicheWarning":<string or null>,"verdict":"<punchy one-sentence headline>","demandStrength":"<HIGH|MEDIUM|LOW>","competitionLevel":"<SATURATED|MODERATE|THIN|ABSENT>","topPainThemes":[{"theme":"<n>","frequency":"<HIGH|MED|LOW>","exactPhrases":["<p1>","<p2>"]}],"missingFeatures":["<f1>","<f2>","<f3>"],"positioningAngle":"<one-liner>","targetAudience":"<specific job title / company type>","redditInsight":"<most revealing signal>","demandQuotes":[{"quote":"<verbatim>","type":"<seeking|lamenting>","upvotes":<n>}],"competitorMatrix":[{"name":"<tool>","rating":<n>,"topComplaint":"<enterprise complaint>","missingFeature":"<missing feature>","pricePoint":"<pricing>","weaknessScore":<0-100>}],"sharedWeakness":"<gap ALL fail to solve>","icp":"<ideal customer profile — role, company size, industry>","gtmMotion":"<recommended GTM — PLG / sales-led / community-led>","buyerInsights":"<2-3 sentences on buyer psychology and what makes them switch>","buildRecommendation":"<1-2 features that would win enterprise deals>","warnings":["<r1>","<r2>"]}`;
 
   return streamClaude(prompt, onChunk);
 }
@@ -1276,11 +1356,12 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
     try {
       setPhase("fetching");
       const subLabel = subreddits.length > 0 ? ` in ${subreddits.length} custom sub${subreddits.length > 1 ? "s" : ""}` : "";
-      setPhaseLabel(`Scanning Reddit + HN${subLabel}${competitors.length > 0 ? ` + ${competitors.length} competitor${competitors.length > 1 ? "s" : ""}` : ""}…`);
-      const [redditPosts, demandPosts, appStoreData, hnPosts, ...competitorResults] = await Promise.all([
+      setPhaseLabel(`Scanning Reddit + HN + App Store + Google Play${subLabel}${competitors.length > 0 ? ` + ${competitors.length} competitor${competitors.length > 1 ? "s" : ""}` : ""}…`);
+      const [redditPosts, demandPosts, appStoreData, gplayData, hnPosts, ...competitorResults] = await Promise.all([
         fetchRedditSignals(query, subreddits, useCustomOnly),
         fetchRedditDemandSignals(query, subreddits, useCustomOnly),
         fetchAppStoreSignals(query),
+        fetchGooglePlaySignals(query),
         fetchHackerNewsSignals(query),
         ...competitors.map(c => fetchCompetitorData(c)),
       ]);
@@ -1290,7 +1371,7 @@ function B2CPanel({ prefill, onPrefillConsumed, onSave }) {
       setRedditFailed(didRedditFail());
       setPhase("synthesizing");
       setPhaseLabel("Synthesizing gap analysis…");
-      const analysis = await synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorResults, p => { if (!controller.signal.aborted) setStreamText(p); }, priorDiscovery, hnPosts);
+      const analysis = await synthesizeB2C(query, redditPosts, demandPosts, appStoreData, competitorResults, p => { if (!controller.signal.aborted) setStreamText(p); }, priorDiscovery, hnPosts, gplayData);
       if (controller.signal.aborted) return;
       if (analysis) { setResult(analysis); setHistory(h => [{ query, competitors: [...competitors], analysis }, ...h.slice(0, 4)]); setPhase("done"); }
       else { setErrorDetail("Analysis returned empty."); setPhase("error"); }
@@ -1454,10 +1535,11 @@ function B2BPanel({ onSave }) {
     resetRedditFailureFlag();
     try {
       setPhase("fetching");
-      setPhaseLabel(`Scanning professional communities + HN${competitors.length > 0 ? ` + ${competitors.length} competitor${competitors.length > 1 ? "s" : ""}` : ""}…`);
-      const [redditPosts, demandPosts, hnPosts, ...competitorParts] = await Promise.all([
+      setPhaseLabel(`Scanning professional communities + HN + Google Play${competitors.length > 0 ? ` + ${competitors.length} competitor${competitors.length > 1 ? "s" : ""}` : ""}…`);
+      const [redditPosts, demandPosts, gplayData, hnPosts, ...competitorParts] = await Promise.all([
         fetchB2BRedditSignals(query, subreddits, useCustomOnly),
         fetchRedditDemandSignals(query, subreddits, useCustomOnly),
+        fetchGooglePlaySignals(query),
         fetchHackerNewsSignals(query),
         ...competitors.map(c => Promise.all([fetchCompetitorData(c), fetchB2BReviewSignals(c)])),
       ]);
@@ -1467,7 +1549,7 @@ function B2BPanel({ onSave }) {
       setRedditFailed(didRedditFail());
       setPhase("synthesizing");
       setPhaseLabel("Synthesizing B2B gap analysis…");
-      const analysis = await synthesizeB2B(query, redditPosts, demandPosts, competitorReviews, competitorResults, p => { if (!controller.signal.aborted) setStreamText(p); }, hnPosts);
+      const analysis = await synthesizeB2B(query, redditPosts, demandPosts, competitorReviews, competitorResults, p => { if (!controller.signal.aborted) setStreamText(p); }, hnPosts, gplayData);
       if (controller.signal.aborted) return;
       if (analysis) { setResult(analysis); setHistory(h => [{ query, competitors: [...competitors], analysis }, ...h.slice(0, 4)]); setPhase("done"); }
       else { setErrorDetail("Analysis returned empty."); setPhase("error"); }
@@ -2311,7 +2393,7 @@ section{background:#111114;border:1px solid #1e1e24;border-radius:8px;padding:20
 ${result.winningAngle ? `<section><h2>Winning Angle</h2><p style="font-size:14px;line-height:1.7;color:#e2e2e8">${result.winningAngle}</p></section>` : ""}
 
 <div class="footer">
-  <span>SOURCES: App Store RSS · Reddit API · Claude Synthesis</span>
+  <span>SOURCES: App Store RSS · Google Play · Reddit API · Hacker News · Claude Synthesis</span>
   <span>© ${new Date().getFullYear()} jasonpfields.com · niche-gap.vercel.app</span>
 </div>
 </body></html>`;
@@ -3206,7 +3288,7 @@ export default function Home() {
 
           {/* Footer */}
           <div style={{ marginTop: 60, paddingTop: 20, borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>SOURCES: Reddit API · App Store RSS · Claude Synthesis</span>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted, letterSpacing: "0.1em" }}>SOURCES: Reddit API · App Store RSS · Google Play · Hacker News · Claude Synthesis</span>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: C.muted }}>v0.5 · © {new Date().getFullYear()} jasonpfields.com</span>
           </div>
 
